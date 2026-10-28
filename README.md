@@ -160,12 +160,29 @@ Trong Cloudflare Dashboard, mở **Networking → Tunnels**, chọn Tunnel của
 | --- | --- |
 | `proxy.example.com` | `http://npm:81` |
 | `example.com` | `http://npm:80` |
+| `portainer.example.com` | `https://portainer:9443` |
 
-Thay `example.com` bằng zone của bạn. Thêm route `docker.example.com` đến `http://npm:80`, sau đó tạo Proxy Host tương ứng trong NPM trỏ đến `https://portainer:9443` và bật Websockets Support. Tunnel và NPM cùng nối vào Docker network `infra_edge`, nên `cloudflared` truy cập được tên dịch vụ `npm`. Cloudflare tạo DNS route cho hostname đã publish; không cần mở cổng dịch vụ trên router hoặc host.
+Thay `example.com` bằng zone của bạn. Với route Portainer, đặt **No TLS Verify** trong cấu hình origin vì Portainer mặc định dùng chứng chỉ tự ký trong container. Cloudflare Tunnel và Portainer cùng nối vào Docker network `infra_edge`, nên có thể trỏ thẳng `https://portainer:9443`; không cần Proxy Host NPM ở giữa. Tunnel/NPM cũng dùng network này để truy cập dịch vụ `npm`. Cloudflare tạo DNS route cho hostname đã publish; không cần mở cổng dịch vụ trên router hoặc host.
 
 Cloudflare có thể tạo Tunnel mới tại **Networking → Tunnels → Create a tunnel**. Khi Tunnel đã kết nối, thêm route theo các bước trên. Xem [hướng dẫn Cloudflare tạo Tunnel và Published application route](https://developers.cloudflare.com/tunnel/get-started/).
 
-NPM và Portainer yêu cầu tạo tài khoản quản trị ở lần đăng nhập đầu tiên. Portainer được cấp Docker socket, quyền này gần tương đương root trên host; chỉ cho quản trị viên tin cậy truy cập. Portainer CE hướng tới homelab/học tập; hãy đánh giá giấy phép và hỗ trợ phù hợp trước khi dùng production. [Portainer CE](https://github.com/portainer/portainer#intended-use)
+### Khởi tạo tài khoản admin và API token của Portainer
+
+Không cần lấy “setup token” để tạo tài khoản admin. Sau khi thêm hostname Tunnel trỏ trực tiếp tới `https://portainer:9443`, mở hostname đó trong trình duyệt và tạo tài khoản đầu tiên (mặc định username `admin`, mật khẩu tối thiểu 12 ký tự). Hoàn tất trong vòng 5 phút kể từ lúc Portainer khởi động lần đầu; nếu hết thời gian, khởi động lại dịch vụ để có thêm 5 phút:
+
+```bash
+sudo docker compose -p <PROJECT_SLUG> -f <PROJECT_DIR>/compose.yaml --profile portainer restart portainer
+```
+
+Để tạo **API access token** sau khi đăng nhập: chọn tên tài khoản ở góc trên bên phải → **My account** → **Access tokens** → **Add access token**. Nhập lại mật khẩu để xác nhận, đặt mô tả, rồi sao chép token ngay vì Portainer không hiển thị lại sau đó. Đây là token dùng gọi API, khác với mật khẩu admin và không cần thiết cho đăng nhập giao diện. Ví dụ gọi API (thay hostname; nhập token ẩn khi được hỏi):
+
+```bash
+read -rsp 'Portainer API token: ' PORTAINER_API_KEY; printf '\n'
+curl --fail --silent --show-error -H "X-API-Key: ${PORTAINER_API_KEY}" https://portainer.example.com/api/stacks
+unset PORTAINER_API_KEY
+```
+
+Portainer được cấp Docker socket, quyền này gần tương đương root trên host; chỉ cho quản trị viên tin cậy truy cập. Portainer CE hướng tới homelab/học tập; hãy đánh giá giấy phép và hỗ trợ phù hợp trước khi dùng production. [Portainer CE](https://github.com/portainer/portainer#intended-use)
 
 ## Dịch vụ riêng lẻ và cập nhật
 
