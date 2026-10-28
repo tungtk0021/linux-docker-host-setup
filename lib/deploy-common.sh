@@ -335,9 +335,13 @@ read_inputs() {
   local saved_domain
   saved_domain="$(read_config_value DOMAIN)"
   local default_domain="${saved_domain:-${DOMAIN:-${DEFAULT_DOMAIN:-}}}"
-  local entered_domain answer
+  local entered_domain
   if [[ "${INSTALL_PROGRESS_STEP}" == DOMAIN ]]; then
-    read -r -p "Domain gốc (Enter để mặc định: ${default_domain:-chưa cấu hình}; ví dụ: example.domain.com): " entered_domain
+    if [[ -n "${default_domain}" ]]; then
+      read -r -p "Domain gốc (Enter giữ domain hiện tại/mặc định: ${default_domain}; nhập domain mới để thay; ví dụ: example.domain.com): " entered_domain
+    else
+      read -r -p "Domain gốc (Enter để chưa cấu hình; nhập domain mới; ví dụ: example.domain.com): " entered_domain
+    fi
     DOMAIN="${entered_domain:-${default_domain}}"
     save_install_progress DOMAIN
   fi
@@ -351,13 +355,10 @@ read_inputs() {
 
   if [[ "${INSTALL_PROGRESS_STEP}" == TOKEN ]]; then
     if [[ -s "${TOKEN_FILE}" ]]; then
-      read -r -p "Đã có Tunnel token (Enter giữ token đang lưu; n để thay): " answer
-      if [[ "${answer}" =~ ^([nN]|no|NO)$ ]]; then
-        read -r -s -p "Token mới (Enter để giữ token cũ; ví dụ: example.tokens): " TUNNEL_TOKEN
-        printf '\n'
-      fi
+      read -r -s -p "Cloudflare Tunnel token (Enter giữ token đã lưu; nhập token mới để thay; ví dụ: example.tokens): " TUNNEL_TOKEN
+      printf '\n'
     else
-      read -r -s -p "Cloudflare Tunnel token (Enter để chưa cấu hình; ví dụ: example.tokens): " TUNNEL_TOKEN
+      read -r -s -p "Cloudflare Tunnel token (Enter để chưa cấu hình; nhập token mới; ví dụ: example.tokens): " TUNNEL_TOKEN
       printf '\n'
     fi
     if [[ -n "${TUNNEL_TOKEN:-}" ]]; then
