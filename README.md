@@ -2,6 +2,16 @@
 
 Công cụ cài Docker Engine, Docker Compose plugin, Nginx Proxy Manager (NPM), Portainer CE và Cloudflare Tunnel. Hỗ trợ Ubuntu Server 22.04/24.04/26.04 LTS, Debian 12/13 và kiến trúc `amd64`/`arm64`.
 
+## Trước khi cài: thư mục dự án đã tồn tại
+
+Installer không ghi đè một thư mục đích có sẵn nếu thư mục đó chưa được đánh dấu là dự án do công cụ này quản lý. Nếu gặp thông báo thư mục đã tồn tại:
+
+- **Đó là dự án đã cài bằng installer này:** nhập lại đúng home, đường dẫn và mã dự án đã lưu. Installer nhận diện qua `.project-managed`, giữ `data/` và token hiện tại, rồi cập nhật cấu hình. Để cập nhật code thường ngày, dùng `update-project.sh` như hướng dẫn bên dưới.
+- **Đó là thư mục cũ hoặc do bạn tự tạo:** trước tiên xem nội dung, ví dụ `sudo ls -la /duong/dan/du-an` và `sudo du -sh /duong/dan/du-an`. Nếu có dữ liệu cần giữ, không xóa thư mục; chọn một thư mục đích mới cho bản cài và dùng chức năng khôi phục dữ liệu sau khi cài. Nếu thư mục hoàn toàn rỗng, có thể chọn đường dẫn mới hoặc xóa riêng thư mục rỗng rồi chạy lại.
+- **Đó là dự án được quản lý nhưng bạn nhập mã khác:** không chạy installer với mã mới tại đó. Mở `sudo <đường-dẫn-dự-án>/manage.sh`, chọn đổi mã/tên/vị trí, rồi dùng đường dẫn và mã mới mà menu đã lưu.
+
+Không xóa một thư mục chỉ vì installer từ chối dùng nó. Các thư mục cũ có thể chứa dữ liệu NPM, chứng chỉ, token hoặc backup; hãy xác minh và sao lưu trước khi dọn.
+
 ## Cài đặt
 
 ```bash
