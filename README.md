@@ -17,6 +17,7 @@ Clone repo rồi chạy đúng script theo hệ điều hành:
 ```bash
 git clone https://github.com/tungtk0021/ubuntu-deploy.git
 cd ubuntu-deploy
+chmod +x deploy-ubuntu.sh deploy-debian.sh
 
 sudo ./deploy-ubuntu.sh
 # hoặc
