@@ -2,6 +2,9 @@ services:
   npm:
     image: jc21/nginx-proxy-manager:2.16.0
     restart: unless-stopped
+    profiles:
+      - npm
+      - all
     expose:
       - "80"
       - "81"
@@ -18,6 +21,9 @@ services:
   portainer:
     image: portainer/portainer-ce:2.45.3
     restart: unless-stopped
+    profiles:
+      - portainer
+      - all
     command: -H unix:///var/run/docker.sock
     expose:
       - "9443"
@@ -32,6 +38,9 @@ services:
   cloudflared:
     image: cloudflare/cloudflared:2026.10.5
     restart: unless-stopped
+    profiles:
+      - tunnel
+      - all
     command: tunnel run --token-file /run/secrets/cloudflare_tunnel_token
     user: "65532:65532"
     group_add:

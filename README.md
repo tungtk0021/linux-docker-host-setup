@@ -54,6 +54,27 @@ NPM và Portainer yêu cầu tạo tài khoản quản trị khi đăng nhập l
 
 Portainer CE là Community Edition. Portainer mô tả CE dành cho homelab/học tập và không dành cho hệ thống kinh doanh hoặc production có yêu cầu uptime, bảo mật hay toàn vẹn dữ liệu; hãy đánh giá giấy phép và hỗ trợ phù hợp trước khi dùng trong production. [Thông tin Portainer CE](https://github.com/portainer/portainer#intended-use)
 
+## Bật/tắt dịch vụ bằng Compose profiles
+
+Mỗi dịch vụ có profile riêng và profile `all`. Dùng `up -d` để khởi động/tạo dịch vụ; dùng `stop` để dừng mà vẫn giữ container và dữ liệu:
+
+```bash
+sudo docker compose -f /opt/infra-stack/compose.yaml --profile npm up -d npm
+sudo docker compose -f /opt/infra-stack/compose.yaml --profile npm stop npm
+
+sudo docker compose -f /opt/infra-stack/compose.yaml --profile portainer up -d portainer
+sudo docker compose -f /opt/infra-stack/compose.yaml --profile portainer stop portainer
+
+sudo docker compose -f /opt/infra-stack/compose.yaml --profile tunnel up -d cloudflared
+sudo docker compose -f /opt/infra-stack/compose.yaml --profile tunnel stop cloudflared
+
+# Khởi động hoặc dừng cả ba dịch vụ
+sudo docker compose -f /opt/infra-stack/compose.yaml --profile all up -d
+sudo docker compose -f /opt/infra-stack/compose.yaml --profile all stop
+```
+
+Các profile độc lập: dừng NPM không dừng Portainer hoặc Tunnel. Tuy nhiên, khi dừng Tunnel thì các hostname công khai qua Cloudflare sẽ mất kết nối đến máy chủ.
+
 ## Cấu hình và cập nhật
 
 - Compose file đang chạy: `/opt/infra-stack/compose.yaml`.
