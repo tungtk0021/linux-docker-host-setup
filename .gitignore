@@ -1,5 +1,7 @@
 .env
 secrets/
 *.bak
+global-config.conf
+global-config.conf.tmp.*
 project-state.conf
 project-state.conf.tmp.*

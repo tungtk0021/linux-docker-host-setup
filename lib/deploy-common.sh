@@ -15,10 +15,15 @@ APP_NETWORK="${APP_NETWORK:-}"
 EDGE_SUBNET="${EDGE_SUBNET:-}"
 APP_SUBNET="${APP_SUBNET:-}"
 UPDATE_REPO="${UPDATE_REPO:-}"
-UPDATE_BRANCH="${UPDATE_BRANCH:-main}"
+UPDATE_BRANCH="${UPDATE_BRANCH:-}"
 INSTALLED_COMMIT="${INSTALLED_COMMIT:-}"
 TUNNEL_ENABLED="${TUNNEL_ENABLED:-}"
 SOURCE_REPO_DIR="${SOURCE_REPO_DIR:-${SCRIPT_DIR:-}}"
+DEFAULT_PROJECT_PARENT="${DEFAULT_PROJECT_PARENT:-}"
+DEFAULT_PROJECT_DIR="${DEFAULT_PROJECT_DIR:-}"
+DEFAULT_PROJECT_NAME="${DEFAULT_PROJECT_NAME:-}"
+DEFAULT_PROJECT_SLUG="${DEFAULT_PROJECT_SLUG:-}"
+DEFAULT_DOMAIN="${DEFAULT_DOMAIN:-}"
 readonly SECRET_GROUP="cloudflared-secret"
 
 log() { printf '\n[%s] %s\n' "$(date '+%H:%M:%S')" "$*"; }
@@ -31,66 +36,97 @@ read_key_value() {
 }
 
 load_source_config() {
-  local state_file="${SCRIPT_DIR}/project-state.conf" defaults_file="${SCRIPT_DIR}/project-defaults.conf" source_file key value
+  local global_file="${SCRIPT_DIR}/global-config.conf" defaults_file="${SCRIPT_DIR}/project-defaults.conf" source_file key value
   source_file="${defaults_file}"
-  if [[ -f "${state_file}" ]]; then
-    [[ "$(read_key_value "${state_file}" INSTALL_STATUS)" == installed ]] \
-      || die "File trạng thái ${state_file} tồn tại nhưng không đánh dấu installed; hãy kiểm tra file trước khi cài."
-    source_file="${state_file}"
-    [[ -n "$(read_key_value "${source_file}" STACK_DIR)" ]] || die "File trạng thái thiếu STACK_DIR."
-    log "Đã tìm thấy trạng thái cài đặt tại ${state_file}; dùng cấu hình đã lưu làm giá trị mặc định."
+  if [[ -f "${global_file}" ]]; then
+    source_file="${global_file}"
+    log "Đã nạp cấu hình mặc định và danh sách dự án từ ${global_file}."
   else
-    log "Chưa có file trạng thái cài đặt tại ${state_file}; dùng cấu hình mặc định."
+    log "Chưa có ${global_file}; dùng project-defaults.conf."
   fi
-
-  for key in PROJECT_HOME PROJECT_RELATIVE_DIR PROJECT_NAME PROJECT_SLUG DOMAIN \
-    EDGE_NETWORK APP_NETWORK EDGE_SUBNET APP_SUBNET UPDATE_BRANCH; do
+  for key in DEFAULT_PROJECT_PARENT DEFAULT_PROJECT_DIR DEFAULT_PROJECT_NAME DEFAULT_PROJECT_SLUG \
+    DEFAULT_DOMAIN EDGE_NETWORK APP_NETWORK EDGE_SUBNET APP_SUBNET UPDATE_BRANCH; do
     value="$(read_key_value "${source_file}" "${key}")"
+    [[ -n "${value}" ]] || value="$(read_key_value "${defaults_file}" "${key}")"
     case "${key}" in
-      PROJECT_HOME) PROJECT_HOME="${PROJECT_HOME:-${value}}" ;;
-      PROJECT_RELATIVE_DIR) PROJECT_RELATIVE_DIR="${PROJECT_RELATIVE_DIR:-${value}}" ;;
-      PROJECT_NAME) PROJECT_NAME="${PROJECT_NAME:-${value}}" ;;
-      PROJECT_SLUG) PROJECT_SLUG="${PROJECT_SLUG:-${value}}" ;;
-      DOMAIN) DOMAIN="${DOMAIN:-${value}}" ;;
-      EDGE_NETWORK) EDGE_NETWORK="${EDGE_NETWORK:-${value}}" ;;
-      APP_NETWORK) APP_NETWORK="${APP_NETWORK:-${value}}" ;;
-      EDGE_SUBNET) EDGE_SUBNET="${EDGE_SUBNET:-${value}}" ;;
-      APP_SUBNET) APP_SUBNET="${APP_SUBNET:-${value}}" ;;
-      UPDATE_BRANCH) UPDATE_BRANCH="${value:-${UPDATE_BRANCH}}" ;;
+      DEFAULT_PROJECT_PARENT) DEFAULT_PROJECT_PARENT="${DEFAULT_PROJECT_PARENT:-${value:-/home}}" ;;
+      DEFAULT_PROJECT_DIR) DEFAULT_PROJECT_DIR="${DEFAULT_PROJECT_DIR:-${value:-docker-infra}}" ;;
+      DEFAULT_PROJECT_NAME) DEFAULT_PROJECT_NAME="${DEFAULT_PROJECT_NAME:-${value}}" ;;
+      DEFAULT_PROJECT_SLUG) DEFAULT_PROJECT_SLUG="${DEFAULT_PROJECT_SLUG:-${value}}" ;;
+      DEFAULT_DOMAIN) DEFAULT_DOMAIN="${DEFAULT_DOMAIN:-${value}}" ;;
+      EDGE_NETWORK) EDGE_NETWORK="${EDGE_NETWORK:-${value:-infra_edge}}" ;;
+      APP_NETWORK) APP_NETWORK="${APP_NETWORK:-${value:-infra_apps}}" ;;
+      EDGE_SUBNET) EDGE_SUBNET="${EDGE_SUBNET:-${value:-172.20.0.0/24}}" ;;
+      APP_SUBNET) APP_SUBNET="${APP_SUBNET:-${value:-172.21.0.0/24}}" ;;
+      UPDATE_BRANCH) UPDATE_BRANCH="${UPDATE_BRANCH:-${value:-main}}" ;;
     esac
   done
+
+  local legacy_state="${SCRIPT_DIR}/project-state.conf" legacy_dir legacy_slug
+  if [[ ! -f "${global_file}" && -f "${legacy_state}" ]]; then
+    legacy_dir="$(read_key_value "${legacy_state}" STACK_DIR)"
+    legacy_slug="$(read_key_value "${legacy_state}" PROJECT_SLUG)"
+    if [[ "${legacy_dir}" == /* && -f "${legacy_dir}/.env" && -f "${legacy_dir}/.project-managed" \
+      && "$(cat "${legacy_dir}/.project-managed")" == "${legacy_slug}" ]]; then
+      STACK_DIR="${legacy_dir}"
+      write_config_value SOURCE_REPO_DIR "${SCRIPT_DIR}"
+      write_config_value GLOBAL_CONFIG_FILE "${global_file}"
+      write_config_value PROJECT_CONFIG_FILE "${legacy_dir}/project-config.conf"
+      log "Đã chuyển đăng ký dự án cũ từ project-state.conf sang global-config.conf."
+      rm -f -- "${legacy_state}"
+    fi
+  fi
 }
 
-write_source_state_from_env() {
-  local config_file="${STACK_DIR}/.env" source_dir state_file tmp key
+write_project_config() {
+  local source_file="${STACK_DIR}/.env" target_file="${STACK_DIR}/project-config.conf" tmp
+  [[ -f "${source_file}" ]] || return 0
+  tmp="$(mktemp "${target_file}.tmp.XXXXXX")"
+  cp -- "${source_file}" "${tmp}"
+  chown root:root "${tmp}"
+  chmod 0600 "${tmp}"
+  mv -f "${tmp}" "${target_file}"
+}
+
+register_global_project() {
+  local config_file="${STACK_DIR}/.env" source_dir global_file defaults_file tmp key value line registered_dir
   [[ -f "${config_file}" && -f "${STACK_DIR}/.project-managed" ]] || return 0
   source_dir="$(read_key_value "${config_file}" SOURCE_REPO_DIR)"
   [[ -n "${source_dir}" && -d "${source_dir}" ]] || return 0
-  state_file="${source_dir}/project-state.conf"
-  tmp="$(mktemp "${state_file}.tmp.XXXXXX")"
-  {
-    printf 'INSTALL_STATUS=installed\n'
-    printf 'SOURCE_REPO_DIR=%s\n' "${source_dir}"
-    printf 'STACK_DIR=%s\n' "${STACK_DIR}"
-    for key in PROJECT_HOME PROJECT_RELATIVE_DIR PROJECT_NAME PROJECT_SLUG DOMAIN DATA_DIR \
-      EDGE_NETWORK APP_NETWORK EDGE_SUBNET APP_SUBNET UPDATE_REPO UPDATE_BRANCH INSTALLED_COMMIT TUNNEL_ENABLED; do
-      printf '%s=%s\n' "${key}" "$(read_key_value "${config_file}" "${key}")"
-    done
-  } > "${tmp}"
+  global_file="${source_dir}/global-config.conf"
+  defaults_file="${source_dir}/project-defaults.conf"
+  tmp="$(mktemp "${global_file}.tmp.XXXXXX")"
+  for key in DEFAULT_PROJECT_PARENT DEFAULT_PROJECT_DIR DEFAULT_PROJECT_NAME DEFAULT_PROJECT_SLUG \
+    DEFAULT_DOMAIN EDGE_NETWORK APP_NETWORK EDGE_SUBNET APP_SUBNET UPDATE_BRANCH; do
+    value="$(read_key_value "${global_file}" "${key}")"
+    [[ -n "${value}" ]] || value="$(read_key_value "${defaults_file}" "${key}")"
+    [[ -n "${value}" ]] || value="${!key}"
+    printf '%s=%s\n' "${key}" "${value}" >> "${tmp}"
+  done
+  if [[ -f "${global_file}" ]]; then
+    while IFS= read -r line; do
+      [[ "${line}" == PROJECT=* ]] || continue
+      registered_dir="${line#PROJECT=}"
+      registered_dir="${registered_dir%%|*}"
+      [[ "${registered_dir}" == "${STACK_DIR}" ]] || printf '%s\n' "${line}" >> "${tmp}"
+    done < "${global_file}"
+  fi
+  printf 'PROJECT=%s|%s/project-config.conf\n' "${STACK_DIR}" "${STACK_DIR}" >> "${tmp}"
   chown root:root "${tmp}"
   chmod 0600 "${tmp}"
-  mv -f "${tmp}" "${state_file}"
+  mv -f "${tmp}" "${global_file}"
 }
 
-remove_source_state_for_project() {
-  local source_dir="$1" project_dir="$2" state_file saved_dir
-  [[ -n "${source_dir}" && -f "${source_dir}/project-state.conf" ]] || return 0
-  state_file="${source_dir}/project-state.conf"
-  saved_dir="$(read_key_value "${state_file}" STACK_DIR)"
-  [[ -n "${saved_dir}" ]] || return 0
-  saved_dir="$(realpath -m -- "${saved_dir}")"
-  project_dir="$(realpath -m -- "${project_dir}")"
-  [[ "${saved_dir}" == "${project_dir}" ]] && rm -f -- "${state_file}"
+unregister_global_project() {
+  local source_dir="$1" project_dir="$2" global_file tmp
+  [[ -n "${source_dir}" ]] || return 0
+  global_file="${source_dir}/global-config.conf"
+  [[ -f "${global_file}" ]] || return 0
+  tmp="$(mktemp "${global_file}.tmp.XXXXXX")"
+  awk -F'|' -v target="PROJECT=${project_dir}" '$0 !~ /^PROJECT=/ || $1 != target { print }' "${global_file}" > "${tmp}"
+  chown root:root "${tmp}"
+  chmod 0600 "${tmp}"
+  mv -f "${tmp}" "${global_file}"
 }
 
 usage() {
@@ -102,8 +138,9 @@ Cách dùng:
   sudo ./deploy-debian.sh
 
 Tùy chọn qua biến môi trường:
-  PROJECT_HOME    Home chứa dự án (mặc định home của người gọi sudo)
-  DEFAULT_DOMAIN  Domain mặc định (không đặt thì domain để trống)
+  DEFAULT_PROJECT_PARENT Thư mục cha cho dự án (mặc định /home)
+  DEFAULT_PROJECT_DIR   Tên thư mục dự án mặc định
+  DEFAULT_DOMAIN        Domain mặc định (không đặt thì domain để trống)
   UPDATE_BRANCH   Nhánh GitHub cần theo dõi (mặc định main)
   EDGE_SUBNET     Docker network cho Tunnel/NPM/Portainer (172.20.0.0/24)
   APP_SUBNET      Docker network cho ứng dụng (172.21.0.0/24)
@@ -160,58 +197,43 @@ check_os() {
 
 choose_project_location() {
   [[ -t 0 ]] || die "Cần chạy tương tác để chọn tên và vị trí thư mục dự án."
-  local caller="${SUDO_USER:-root}" caller_home default_slug default_name saved_slug saved_home part home_real resolved_target walk marker default_relative candidate
-  local -a managed_markers=() parts=()
-  caller_home="$(getent passwd "${caller}" | cut -d: -f6)"
-  caller_home="${caller_home:-/root}"
-  PROJECT_HOME="${PROJECT_HOME:-${caller_home}}"
-  [[ "${PROJECT_HOME}" == /* && -d "${PROJECT_HOME}" && ! -L "${PROJECT_HOME}" ]] || die "PROJECT_HOME phải là thư mục home tuyệt đối đã tồn tại và không phải symlink."
-  default_slug="${PROJECT_SLUG:-docker-infra}"
+  local default_relative default_name saved_slug saved_name home_real resolved_target source_real marker config_file
+  PROJECT_HOME="${DEFAULT_PROJECT_PARENT:-/home}"
+  [[ "${PROJECT_HOME}" == /* && ! -L "${PROJECT_HOME}" ]] || die "DEFAULT_PROJECT_PARENT phải là đường dẫn tuyệt đối và không phải symlink."
+  install -d -m 0755 "${PROJECT_HOME}"
   home_real="$(realpath -e "${PROJECT_HOME}")"
-  default_relative="${PROJECT_RELATIVE_DIR:-${PROJECT_SLUG:-${default_slug}}}"
-  if [[ -z "${PROJECT_RELATIVE_DIR:-}" && -z "${PROJECT_SLUG:-}" && ! -e "${PROJECT_HOME}/${default_relative}" ]]; then
-    mapfile -t managed_markers < <(find "${home_real}" -mindepth 2 -maxdepth 4 -type f -name .project-managed -print 2>/dev/null)
-    if ((${#managed_markers[@]} == 1)); then
-      candidate="${managed_markers[0]%/.project-managed}"
-      if [[ "${candidate}" == "${home_real}/"* ]]; then
-        default_relative="${candidate#"${home_real}/"}"
-      fi
-    fi
-  fi
-  read -r -p "Home dự án [${PROJECT_HOME}]: " entered_home
-  PROJECT_HOME="${entered_home:-${PROJECT_HOME}}"
-  [[ "${PROJECT_HOME}" == /* && -d "${PROJECT_HOME}" && ! -L "${PROJECT_HOME}" ]] || die "Home dự án phải là thư mục tuyệt đối đã tồn tại và không phải symlink."
-  read -r -p "Đường dẫn thư mục dự án bên trong home [${default_relative}]: " entered_relative
+  default_relative="${PROJECT_RELATIVE_DIR:-${DEFAULT_PROJECT_DIR:-docker-infra}}"
+  read -r -p "Tên thư mục dự án dưới ${PROJECT_HOME} [${default_relative}]: " entered_relative
   PROJECT_RELATIVE_DIR="${entered_relative:-${default_relative}}"
-  [[ "${PROJECT_RELATIVE_DIR}" != /* && "${PROJECT_RELATIVE_DIR}" != *:* && "${PROJECT_RELATIVE_DIR}" != *[[:space:]]* ]] || die "Đường dẫn dự án phải tương đối, không có khoảng trắng hoặc dấu hai chấm."
-  IFS=/ read -ra parts <<< "${PROJECT_RELATIVE_DIR}"
-  for part in "${parts[@]}"; do [[ -n "${part}" && "${part}" != . && "${part}" != .. ]] || die "Đường dẫn dự án không được chứa thành phần rỗng, . hoặc .."; done
-  STACK_DIR="${PROJECT_HOME}/${PROJECT_RELATIVE_DIR}"
-  home_real="$(realpath -e "${PROJECT_HOME}")"
+  [[ "${PROJECT_RELATIVE_DIR}" =~ ^[a-z0-9][a-z0-9_-]{0,47}$ ]] || die "Nhập tên thư mục đơn bằng chữ thường, số, gạch ngang hoặc gạch dưới; không nhập đường dẫn đầy đủ."
+  STACK_DIR="${home_real}/${PROJECT_RELATIVE_DIR}"
   resolved_target="$(realpath -m -- "${STACK_DIR}")"
-  [[ "${resolved_target}" == "${home_real}/"* ]] || die "Đường dẫn dự án phải nằm bên trong home đã chọn."
-  walk="${home_real}"
-  for part in "${parts[@]}"; do walk="${walk}/${part}"; [[ ! -L "${walk}" ]] || die "Đường dẫn dự án không được đi qua symlink: ${walk}"; done
+  [[ "${resolved_target}" == "${home_real}/"* ]] || die "Thư mục dự án phải nằm trực tiếp dưới ${home_real}."
+  source_real="$(realpath -e "${SCRIPT_DIR}")"
+  [[ "${resolved_target}" != "${source_real}" && "${source_real}" != "${resolved_target}/"* ]] \
+    || die "Thư mục dự án không được trùng hoặc bao gồm thư mục source repo: ${source_real}"
+  [[ ! -L "${STACK_DIR}" ]] || die "Thư mục dự án không được là symlink: ${STACK_DIR}"
   if [[ -e "${STACK_DIR}" ]]; then
     [[ -f "${STACK_DIR}/.project-managed" ]] || die "Thư mục đích đã tồn tại và không có dấu quản lý của installer: ${STACK_DIR}"
     marker="$(cat "${STACK_DIR}/.project-managed")"
     [[ "${marker}" =~ ^[a-z0-9][a-z0-9_-]{0,47}$ ]] || die "Dấu quản lý dự án bị lỗi; không tự ghi đè."
     [[ -f "${STACK_DIR}/.env" ]] || die "Thiếu .env trong dự án đã quản lý; hãy khôi phục cấu hình trước khi chạy installer."
-    saved_slug="$(read_config_value PROJECT_SLUG)"
+    config_file="${STACK_DIR}/project-config.conf"
+    [[ -f "${config_file}" ]] || config_file="${STACK_DIR}/.env"
+    saved_slug="$(read_key_value "${config_file}" PROJECT_SLUG)"
+    saved_name="$(read_key_value "${config_file}" PROJECT_NAME)"
     [[ "${saved_slug}" == "${marker}" ]] || die "Mã dự án trong .env không khớp dấu quản lý; hãy sửa qua manage.sh trước."
     PROJECT_SLUG="${PROJECT_SLUG:-${saved_slug}}"
-    PROJECT_NAME="${PROJECT_NAME:-$(read_config_value PROJECT_NAME)}"
-    saved_home="$(read_config_value PROJECT_HOME)"
-    [[ -z "${saved_home}" || "$(realpath -e "${saved_home}" 2>/dev/null || true)" == "${home_real}" ]] || die "Thư mục đang lưu thuộc home khác; nhập đúng home dự án đã cài."
-    EDGE_NETWORK="${EDGE_NETWORK:-$(read_config_value EDGE_NETWORK)}"
-    APP_NETWORK="${APP_NETWORK:-$(read_config_value APP_NETWORK)}"
-    EDGE_SUBNET="${EDGE_SUBNET:-$(read_config_value EDGE_SUBNET)}"
-    APP_SUBNET="${APP_SUBNET:-$(read_config_value APP_SUBNET)}"
+    PROJECT_NAME="${PROJECT_NAME:-${saved_name}}"
+    EDGE_NETWORK="${EDGE_NETWORK:-$(read_key_value "${config_file}" EDGE_NETWORK)}"
+    APP_NETWORK="${APP_NETWORK:-$(read_key_value "${config_file}" APP_NETWORK)}"
+    EDGE_SUBNET="${EDGE_SUBNET:-$(read_key_value "${config_file}" EDGE_SUBNET)}"
+    APP_SUBNET="${APP_SUBNET:-$(read_key_value "${config_file}" APP_SUBNET)}"
   else
-    PROJECT_SLUG="${PROJECT_SLUG:-${default_slug}}"
-    PROJECT_NAME="${PROJECT_NAME:-${PROJECT_SLUG}}"
+    PROJECT_SLUG="${PROJECT_SLUG:-${DEFAULT_PROJECT_SLUG:-${PROJECT_RELATIVE_DIR}}}"
+    PROJECT_NAME="${PROJECT_NAME:-${DEFAULT_PROJECT_NAME:-${PROJECT_RELATIVE_DIR}}}"
   fi
-  default_name="${PROJECT_NAME:-${PROJECT_SLUG}}"
+  default_name="${PROJECT_NAME:-${PROJECT_RELATIVE_DIR}}"
   read -r -p "Tên hiển thị dự án [${default_name}]: " entered_name
   PROJECT_NAME="${entered_name:-${default_name}}"
   read -r -p "Mã dự án dùng cho Docker [${PROJECT_SLUG}]: " entered_slug
@@ -391,7 +413,8 @@ write_config_value() {
   chown root:root "${tmp}"
   chmod 0600 "${tmp}"
   mv -f "${tmp}" "${file}"
-  write_source_state_from_env
+  write_project_config
+  register_global_project
 }
 
 compose() {
@@ -562,22 +585,20 @@ EOF
 }
 
 project_dir_for_relative() {
-  local base="$1" relative="$2" part
-  [[ "${relative}" != /* && "${relative}" != *:* && "${relative}" != *[[:space:]]* ]] || return 1
-  IFS=/ read -ra pieces <<< "${relative}"
-  for part in "${pieces[@]}"; do [[ -n "${part}" && "${part}" != . && "${part}" != .. ]] || return 1; done
+  local base="$1" relative="$2"
+  [[ "${relative}" =~ ^[a-z0-9][a-z0-9_-]{0,47}$ ]] || return 1
   printf '%s/%s' "${base}" "${relative}"
 }
 
 rename_project() {
-  local new_name new_slug new_rel target old_dir old_slug home_real walk part
+  local new_name new_slug new_rel target old_dir old_slug home_real walk part source_dir
   read -r -p "Tên hiển thị mới [${PROJECT_NAME}]: " new_name
   new_name="${new_name:-${PROJECT_NAME}}"
   read -r -p "Mã dự án Docker mới [${PROJECT_SLUG}]: " new_slug
   new_slug="${new_slug:-${PROJECT_SLUG}}"
   [[ "${new_slug}" =~ ^[a-z0-9][a-z0-9_-]{0,47}$ ]] || die "Mã dự án không hợp lệ."
   [[ -n "${new_name}" && "${new_name}" != *$'\n'* && "${new_name}" != *$'\r'* ]] || die "Tên hiển thị không hợp lệ."
-  read -r -p "Đường dẫn mới bên trong ${PROJECT_HOME} [${PROJECT_RELATIVE_DIR}]: " new_rel
+  read -r -p "Tên thư mục mới dưới ${PROJECT_HOME} [${PROJECT_RELATIVE_DIR}]: " new_rel
   new_rel="${new_rel:-${PROJECT_RELATIVE_DIR}}"
   target="$(project_dir_for_relative "${PROJECT_HOME}" "${new_rel}")" || die "Đường dẫn tương đối không hợp lệ."
   old_dir="$(realpath -e "${STACK_DIR}")"
@@ -593,9 +614,11 @@ rename_project() {
   read -r -p "Gõ MOVE ${PROJECT_SLUG} để xác nhận: " confirmation
   [[ "${confirmation}" == "MOVE ${PROJECT_SLUG}" ]] || { printf 'Đã hủy.\n'; return; }
   old_slug="${PROJECT_SLUG}"
+  source_dir="$(read_config_value SOURCE_REPO_DIR)"
   compose --profile all down
   install -d -m 0750 "$(dirname "${target}")"
   mv -- "${old_dir}" "${target}"
+  unregister_global_project "${source_dir}" "${old_dir}"
   STACK_DIR="${target}"
   DATA_DIR="${STACK_DIR}/data"
   PROJECT_RELATIVE_DIR="${new_rel}"
@@ -606,6 +629,8 @@ rename_project() {
   write_config_value PROJECT_SLUG "${PROJECT_SLUG}"
   write_config_value PROJECT_RELATIVE_DIR "${PROJECT_RELATIVE_DIR}"
   write_config_value DATA_DIR "${DATA_DIR}"
+  write_config_value PROJECT_CONFIG_FILE "${STACK_DIR}/project-config.conf"
+  write_config_value GLOBAL_CONFIG_FILE "${source_dir}/global-config.conf"
   printf '%s' "${PROJECT_SLUG}" > "${STACK_DIR}/.project-managed"
   log "Đã chuyển dự án. Stack cũ (${old_slug}) đã được dừng; dùng ${STACK_DIR}/start.sh để khởi động."
   exit 0
@@ -651,7 +676,7 @@ wipe_project() {
   read -r -p "Gõ WIPE ${PROJECT_SLUG} để xác nhận: " confirmation
   [[ "${confirmation}" == "WIPE ${PROJECT_SLUG}" ]] || { printf 'Đã hủy.\n'; return; }
   compose --profile all down
-  remove_source_state_for_project "${source_dir}" "${real_dir}"
+  unregister_global_project "${source_dir}" "${real_dir}"
   cd "${PROJECT_HOME}"
   rm -rf --one-file-system -- "${real_dir}"
   log "Đã xóa dự án ${PROJECT_SLUG}."
@@ -701,6 +726,8 @@ PROJECT_SLUG=${PROJECT_SLUG}
 PROJECT_HOME=${PROJECT_HOME}
 PROJECT_RELATIVE_DIR=${PROJECT_RELATIVE_DIR}
 SOURCE_REPO_DIR=${SCRIPT_DIR}
+GLOBAL_CONFIG_FILE=${SCRIPT_DIR}/global-config.conf
+PROJECT_CONFIG_FILE=${STACK_DIR}/project-config.conf
 DOMAIN=${DOMAIN}
 DATA_DIR=${DATA_DIR}
 TUNNEL_ENABLED=${TUNNEL_ENABLED}
@@ -719,6 +746,7 @@ EOF
   chown root:root "${STACK_DIR}/.env" "${STACK_DIR}/compose.yaml"
   printf '%s' "${PROJECT_SLUG}" > "${STACK_DIR}/.project-managed"
   chmod 0640 "${STACK_DIR}/.project-managed"
+  write_project_config
   write_project_helpers
 }
 
@@ -751,6 +779,8 @@ Portainer và NPM yêu cầu tạo tài khoản quản trị ở lần đăng nh
 Không có tài khoản/mật khẩu mặc định được tạo bởi script.
 
 Trong thư mục dự án có start.sh, stop.sh, manage.sh, compose.yaml, secrets/, data/ và backups/.
+File cấu hình dự án: ${STACK_DIR}/project-config.conf
+Global config      : ${SCRIPT_DIR}/global-config.conf
 Chạy dự án: sudo ${STACK_DIR}/start.sh | Dừng toàn bộ: sudo ${STACK_DIR}/stop.sh
 Quản lý/đổi tên/khôi phục/xóa: sudo ${STACK_DIR}/manage.sh
 EOF
@@ -804,6 +834,6 @@ deploy_main() {
   save_secret
   write_compose_config
   deploy_stack
-  write_source_state_from_env
+  register_global_project
   print_summary
 }
