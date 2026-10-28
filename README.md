@@ -74,6 +74,33 @@ Nếu dự định đặt dữ liệu trên volume/NAS, hãy mount volume đó t
 
 Các lệnh này chỉ dùng Compose project name đã lưu của dự án đó, nên không dừng stack Docker khác trên máy.
 
+## Tổng hợp lệnh dự án
+
+Thay `<PROJECT_DIR>` bằng đường dẫn thư mục cài đặt và `<PROJECT_SLUG>` bằng mã Docker đã chọn.
+
+| Lệnh | Tác dụng |
+| --- | --- |
+| `sudo apt-get update && sudo apt-get install -y git` | Cài Git trên Ubuntu/Debian. |
+| `git clone https://github.com/tungtk0021/linux-docker-host-setup.git` | Tải source lần đầu; tạo thư mục `linux-docker-host-setup`. |
+| `cd ~/linux-docker-host-setup` | Chuyển vào thư mục source đã clone. |
+| `git fetch origin` | Lấy thông tin commit mới từ GitHub. |
+| `git checkout main` | Chuyển sang nhánh chính. |
+| `git pull --ff-only origin main` | Cập nhật source theo nhánh `main`, không tạo merge commit. |
+| `chmod +x deploy-ubuntu.sh deploy-debian.sh manage-config.sh update-project.sh remove-legacy.sh remove-project.sh` | Cấp quyền chạy cho các script. |
+| `sudo ./deploy-ubuntu.sh` | Cài stack trên Ubuntu Server. |
+| `sudo ./deploy-debian.sh` | Cài stack trên Debian. |
+| `sudo ./start.sh` | Kiểm tra cập nhật GitHub rồi khởi động toàn bộ dự án. |
+| `sudo ./stop.sh` | Dừng toàn bộ dịch vụ, giữ dữ liệu và container. |
+| `sudo ./manage.sh` | Mở menu quản trị domain, Tunnel, cấu hình, đổi vị trí, khôi phục hoặc xóa trắng. |
+| `sudo ./remove-project.sh` | Mở menu gỡ theo `project-state.conf`: dừng và giữ dữ liệu, xóa toàn bộ sau xác nhận, hoặc mở `manage.sh`. |
+| `sudo ./update-project.sh <PROJECT_DIR>` | Cập nhật template của dự án đã cài; giữ `.env`, token và dữ liệu. Có thể thêm `[commit] [branch]` để chỉ định nguồn cập nhật. |
+| `sudo ./remove-legacy.sh` | Dừng stack của bản cài cũ chưa có `.project-managed`. |
+| `sudo ./remove-legacy.sh --remove-config-only /opt/infra-stack` | Xóa riêng cấu hình bản cũ đã dừng; dữ liệu bind mount được giữ lại. |
+| `sudo docker compose -p <PROJECT_SLUG> -f <PROJECT_DIR>/compose.yaml --profile npm up -d npm` | Khởi động riêng NPM. |
+| `sudo docker compose -p <PROJECT_SLUG> -f <PROJECT_DIR>/compose.yaml --profile npm stop npm` | Dừng riêng NPM. |
+| `sudo docker compose -p <PROJECT_SLUG> -f <PROJECT_DIR>/compose.yaml --profile all pull` | Tải image cho toàn bộ dịch vụ. |
+| `sudo docker compose -p <PROJECT_SLUG> -f <PROJECT_DIR>/compose.yaml --profile all up -d` | Khởi động toàn bộ dịch vụ theo cấu hình Compose hiện tại. |
+
 ## Gỡ dự án theo file trạng thái
 
 Chạy `sudo ./remove-project.sh` từ gốc source repo. Script đọc `project-state.conf` và đưa ra ba lựa chọn: dừng/gỡ container nhưng giữ cấu hình và dữ liệu; xóa toàn bộ dự án sau khi gõ xác nhận; hoặc mở `manage.sh`. Nếu chưa có file trạng thái, script báo chưa cài từ source repo hiện tại. Bản cài cũ vẫn dùng `remove-legacy.sh`.
