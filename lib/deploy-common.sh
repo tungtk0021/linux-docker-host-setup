@@ -875,6 +875,9 @@ Docker network : ${EDGE_NETWORK} (${EDGE_SUBNET}), ${APP_NETWORK} (${APP_SUBNET}
 Không có cổng dịch vụ nào được publish trực tiếp lên host.
 Portainer và NPM yêu cầu tạo tài khoản quản trị ở lần đăng nhập đầu tiên.
 Không có tài khoản/mật khẩu mặc định được tạo bởi script.
+Trong Cloudflare Tunnel, thêm Published application cho Portainer: portainer.${DOMAIN:-example.domain.com} -> http://portainer:9000
+Lấy Setup token ban đầu bằng lệnh sau, rồi nhập token vào trang Portainer để tạo admin (hoàn tất trong 5 phút):
+  sudo docker logs "\$(sudo docker ps --filter label=com.docker.compose.service=portainer --format '{{.Names}}' | head -n1)" 2>&1 | grep 'setup_token='
 
 Trong thư mục dự án có start.sh, stop.sh, manage.sh, compose.yaml, secrets/, data/ và backups/.
 File cấu hình dự án: ${STACK_DIR}/project-config.conf
@@ -888,6 +891,7 @@ EOF
 Trong Cloudflare Dashboard → Networking → Tunnels → chọn Tunnel → Routes, thêm Published application:
   proxy.${DOMAIN}  -> http://npm:81
   ${DOMAIN}        -> http://npm:80
+  portainer.${DOMAIN} -> http://portainer:9000
 EOF
   else
     printf '\nDomain chưa cấu hình; đặt domain trong manage.sh rồi thêm Published application route tại Cloudflare Dashboard → Networking → Tunnels → Routes.\n'

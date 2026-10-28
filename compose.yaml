@@ -26,7 +26,7 @@ services:
       - all
     command: -H unix:///var/run/docker.sock
     expose:
-      - "9443"
+      - "9000"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ${DATA_DIR:?Set DATA_DIR in the generated .env}/portainer:/data

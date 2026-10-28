@@ -160,9 +160,9 @@ Trong Cloudflare Dashboard, mở **Networking → Tunnels**, chọn Tunnel của
 | --- | --- |
 | `proxy.example.com` | `http://npm:81` |
 | `example.com` | `http://npm:80` |
-| `portainer.example.com` | `https://portainer:9443` |
+| `portainer.example.com` | `http://portainer:9000` |
 
-Thay `example.com` bằng zone của bạn. Với route Portainer, đặt **No TLS Verify** trong cấu hình origin vì Portainer mặc định dùng chứng chỉ tự ký trong container. Cloudflare Tunnel và Portainer cùng nối vào Docker network `infra_edge`, nên có thể trỏ thẳng `https://portainer:9443`; không cần Proxy Host NPM ở giữa. Tunnel/NPM cũng dùng network này để truy cập dịch vụ `npm`. Cloudflare tạo DNS route cho hostname đã publish; không cần mở cổng dịch vụ trên router hoặc host.
+Thay `example.com` bằng zone của bạn. Cloudflare Tunnel và Portainer cùng nối vào Docker network `infra_edge`, nên trỏ thẳng tới `http://portainer:9000`; không cần Proxy Host NPM ở giữa hay bật **No TLS Verify**. HTTPS phía ngoài do Cloudflare phục vụ. Tunnel/NPM cũng dùng network này để truy cập dịch vụ `npm`. Cloudflare tạo DNS route cho hostname đã publish; không cần mở cổng dịch vụ trên router hoặc host.
 
 Cloudflare có thể tạo Tunnel mới tại **Networking → Tunnels → Create a tunnel**. Khi Tunnel đã kết nối, thêm route theo các bước trên. Xem [hướng dẫn Cloudflare tạo Tunnel và Published application route](https://developers.cloudflare.com/tunnel/get-started/).
 
