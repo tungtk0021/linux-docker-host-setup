@@ -1,0 +1,58 @@
+services:
+  npm:
+    image: jc21/nginx-proxy-manager:2.16.0
+    restart: unless-stopped
+    expose:
+      - "80"
+      - "81"
+      - "443"
+    volumes:
+      - ${DATA_DIR:?Set DATA_DIR in the generated .env}/npm/data:/data
+      - ${DATA_DIR:?Set DATA_DIR in the generated .env}/npm/letsencrypt:/etc/letsencrypt
+    networks:
+      edge: {}
+      apps: {}
+    security_opt:
+      - no-new-privileges:true
+
+  portainer:
+    image: portainer/portainer-ce:2.45.3
+    restart: unless-stopped
+    command: -H unix:///var/run/docker.sock
+    expose:
+      - "9443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${DATA_DIR:?Set DATA_DIR in the generated .env}/portainer:/data
+    networks:
+      edge: {}
+    security_opt:
+      - no-new-privileges:true
+
+  cloudflared:
+    image: cloudflare/cloudflared:2026.10.5
+    restart: unless-stopped
+    command: tunnel run --token-file /run/secrets/cloudflare_tunnel_token
+    user: "65532:65532"
+    group_add:
+      - ${CLOUDFLARED_SECRET_GID:?Set CLOUDFLARED_SECRET_GID in the generated .env}
+    secrets:
+      - cloudflare_tunnel_token
+    networks:
+      edge: {}
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+secrets:
+  cloudflare_tunnel_token:
+    file: ./secrets/cloudflare-tunnel-token
+
+networks:
+  edge:
+    external: true
+    name: ${EDGE_NETWORK:?Set EDGE_NETWORK in the generated .env}
+  apps:
+    external: true
+    name: ${APP_NETWORK:?Set APP_NETWORK in the generated .env}
