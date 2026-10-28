@@ -27,7 +27,7 @@ git pull --ff-only origin main
 Chạy cài đặt:
 
 ```bash
-chmod +x deploy-ubuntu.sh deploy-debian.sh manage-config.sh update-project.sh remove-legacy.sh
+chmod +x deploy-ubuntu.sh deploy-debian.sh manage-config.sh update-project.sh remove-legacy.sh remove-project.sh
 sudo ./deploy-ubuntu.sh
 # hoặc
 sudo ./deploy-debian.sh
@@ -48,14 +48,14 @@ Không xóa một thư mục chỉ vì installer từ chối dùng nó. Các th�
 Clone repo từ tài khoản GitHub của bạn rồi chuyển vào thư mục clone:
 
 ```bash
-chmod +x deploy-ubuntu.sh deploy-debian.sh manage-config.sh update-project.sh remove-legacy.sh
+chmod +x deploy-ubuntu.sh deploy-debian.sh manage-config.sh update-project.sh remove-legacy.sh remove-project.sh
 
 sudo ./deploy-ubuntu.sh
 # hoặc
 sudo ./deploy-debian.sh
 ```
 
-Installer sẽ hỏi home và đường dẫn dự án trước, sau đó hỏi tên hiển thị và mã Docker. Nhấn Enter để nhận giá trị trong dấu `[...]`: mã/thư mục mặc định `docker-infra` (không trùng thư mục clone repo), home là tài khoản đã gọi `sudo` (hoặc `/root` nếu đăng nhập trực tiếp root), mạng là `infra_edge`/`infra_apps` với subnet mẫu `172.20.0.0/24` và `172.21.0.0/24`. Không có domain mặc định; nhấn Enter để cấu hình sau. Nếu home có đúng một dự án được đánh dấu `.project-managed`, installer tự chọn dự án đó làm đường dẫn mặc định; các giá trị tên, mã, mạng, domain và token đã lưu được giữ khi nhấn Enter. Tất cả cấu hình, token, dữ liệu, backup và lệnh quản lý được đặt trong thư mục dự án.
+Installer sẽ hỏi home và đường dẫn dự án trước, sau đó hỏi tên hiển thị và mã Docker. Nhấn Enter để nhận giá trị trong dấu `[...]`: mã/thư mục mặc định `docker-infra` (không trùng thư mục clone repo), home là tài khoản đã gọi `sudo` (hoặc `/root` nếu đăng nhập trực tiếp root), mạng là `infra_edge`/`infra_apps` với subnet mẫu `172.20.0.0/24` và `172.21.0.0/24`. Không có domain mặc định; nhấn Enter để cấu hình sau. Các giá trị mặc định có thể chỉnh trong `project-defaults.conf` ở gốc source repo. Sau khi cài thành công, `project-state.conf` được tạo tại đó, lưu trạng thái và vị trí dự án để lần cài đặt sau dùng lại. File trạng thái bị Git bỏ qua và không chứa Tunnel token; token vẫn nằm riêng trong `secrets/` của dự án. Nếu home có đúng một dự án được đánh dấu `.project-managed`, installer tự chọn dự án đó làm đường dẫn mặc định. Tất cả cấu hình vận hành, dữ liệu, backup và lệnh quản lý được đặt trong thư mục dự án.
 
 Nếu dự án đã có token, nhấn Enter ở câu hỏi giữ token để dùng lại. Ở lần cài mới, không có token Cloudflare mặc định được nhúng trong repo; nhấn Enter ở ô token sẽ cài và chạy NPM/Portainer, đồng thời để Tunnel tắt. Có thể thêm token sau trong `manage.sh` → “Thay Cloudflare Tunnel token”; lần start tiếp theo sẽ chạy Tunnel. Token nhập được ẩn và lưu riêng trong `secrets/cloudflare-tunnel-token`, không nằm trong `.env` hoặc Compose.
 
@@ -73,6 +73,10 @@ Nếu dự định đặt dữ liệu trên volume/NAS, hãy mount volume đó t
 - `compose.yaml`, `.env`, `secrets/`, `data/`, `backups/` nằm cạnh các lệnh trên.
 
 Các lệnh này chỉ dùng Compose project name đã lưu của dự án đó, nên không dừng stack Docker khác trên máy.
+
+## Gỡ dự án theo file trạng thái
+
+Chạy `sudo ./remove-project.sh` từ gốc source repo. Script đọc `project-state.conf` và đưa ra ba lựa chọn: dừng/gỡ container nhưng giữ cấu hình và dữ liệu; xóa toàn bộ dự án sau khi gõ xác nhận; hoặc mở `manage.sh`. Nếu chưa có file trạng thái, script báo chưa cài từ source repo hiện tại. Bản cài cũ vẫn dùng `remove-legacy.sh`.
 
 Khi có commit mới trên nhánh GitHub của dự án, `start.sh` cho chọn cập nhật ngay, hoãn 7 ngày, bỏ qua commit đó cho tới khi có commit mới, bỏ qua một lần hoặc thoát mà không start. Nếu bỏ qua trong 7 ngày thì các cập nhật mới khác cũng sẽ không được hỏi trong thời gian đó. Kiểm tra cần kết nối internet và `curl`; nếu GitHub không phản hồi, script tiếp tục khởi động phiên bản hiện tại. Chạy không có terminal tương tác cũng bỏ qua câu hỏi và start bình thường.
 

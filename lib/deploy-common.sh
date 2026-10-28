@@ -18,10 +18,80 @@ UPDATE_REPO="${UPDATE_REPO:-}"
 UPDATE_BRANCH="${UPDATE_BRANCH:-main}"
 INSTALLED_COMMIT="${INSTALLED_COMMIT:-}"
 TUNNEL_ENABLED="${TUNNEL_ENABLED:-}"
+SOURCE_REPO_DIR="${SOURCE_REPO_DIR:-${SCRIPT_DIR:-}}"
 readonly SECRET_GROUP="cloudflared-secret"
 
 log() { printf '\n[%s] %s\n' "$(date '+%H:%M:%S')" "$*"; }
 die() { printf 'LỖI: %s\n' "$*" >&2; exit 1; }
+
+read_key_value() {
+  local file="$1" key="$2"
+  [[ -f "${file}" ]] || return 0
+  awk -F= -v key="${key}" '$1 == key { sub(/^[^=]*=/, ""); print; exit }' "${file}"
+}
+
+load_source_config() {
+  local state_file="${SCRIPT_DIR}/project-state.conf" defaults_file="${SCRIPT_DIR}/project-defaults.conf" source_file key value
+  source_file="${defaults_file}"
+  if [[ -f "${state_file}" ]]; then
+    [[ "$(read_key_value "${state_file}" INSTALL_STATUS)" == installed ]] \
+      || die "File trạng thái ${state_file} tồn tại nhưng không đánh dấu installed; hãy kiểm tra file trước khi cài."
+    source_file="${state_file}"
+    [[ -n "$(read_key_value "${source_file}" STACK_DIR)" ]] || die "File trạng thái thiếu STACK_DIR."
+    log "Đã tìm thấy trạng thái cài đặt tại ${state_file}; dùng cấu hình đã lưu làm giá trị mặc định."
+  else
+    log "Chưa có file trạng thái cài đặt tại ${state_file}; dùng cấu hình mặc định."
+  fi
+
+  for key in PROJECT_HOME PROJECT_RELATIVE_DIR PROJECT_NAME PROJECT_SLUG DOMAIN \
+    EDGE_NETWORK APP_NETWORK EDGE_SUBNET APP_SUBNET UPDATE_BRANCH; do
+    value="$(read_key_value "${source_file}" "${key}")"
+    case "${key}" in
+      PROJECT_HOME) PROJECT_HOME="${PROJECT_HOME:-${value}}" ;;
+      PROJECT_RELATIVE_DIR) PROJECT_RELATIVE_DIR="${PROJECT_RELATIVE_DIR:-${value}}" ;;
+      PROJECT_NAME) PROJECT_NAME="${PROJECT_NAME:-${value}}" ;;
+      PROJECT_SLUG) PROJECT_SLUG="${PROJECT_SLUG:-${value}}" ;;
+      DOMAIN) DOMAIN="${DOMAIN:-${value}}" ;;
+      EDGE_NETWORK) EDGE_NETWORK="${EDGE_NETWORK:-${value}}" ;;
+      APP_NETWORK) APP_NETWORK="${APP_NETWORK:-${value}}" ;;
+      EDGE_SUBNET) EDGE_SUBNET="${EDGE_SUBNET:-${value}}" ;;
+      APP_SUBNET) APP_SUBNET="${APP_SUBNET:-${value}}" ;;
+      UPDATE_BRANCH) UPDATE_BRANCH="${value:-${UPDATE_BRANCH}}" ;;
+    esac
+  done
+}
+
+write_source_state_from_env() {
+  local config_file="${STACK_DIR}/.env" source_dir state_file tmp key
+  [[ -f "${config_file}" && -f "${STACK_DIR}/.project-managed" ]] || return 0
+  source_dir="$(read_key_value "${config_file}" SOURCE_REPO_DIR)"
+  [[ -n "${source_dir}" && -d "${source_dir}" ]] || return 0
+  state_file="${source_dir}/project-state.conf"
+  tmp="$(mktemp "${state_file}.tmp.XXXXXX")"
+  {
+    printf 'INSTALL_STATUS=installed\n'
+    printf 'SOURCE_REPO_DIR=%s\n' "${source_dir}"
+    printf 'STACK_DIR=%s\n' "${STACK_DIR}"
+    for key in PROJECT_HOME PROJECT_RELATIVE_DIR PROJECT_NAME PROJECT_SLUG DOMAIN DATA_DIR \
+      EDGE_NETWORK APP_NETWORK EDGE_SUBNET APP_SUBNET UPDATE_REPO UPDATE_BRANCH INSTALLED_COMMIT TUNNEL_ENABLED; do
+      printf '%s=%s\n' "${key}" "$(read_key_value "${config_file}" "${key}")"
+    done
+  } > "${tmp}"
+  chown root:root "${tmp}"
+  chmod 0600 "${tmp}"
+  mv -f "${tmp}" "${state_file}"
+}
+
+remove_source_state_for_project() {
+  local source_dir="$1" project_dir="$2" state_file saved_dir
+  [[ -n "${source_dir}" && -f "${source_dir}/project-state.conf" ]] || return 0
+  state_file="${source_dir}/project-state.conf"
+  saved_dir="$(read_key_value "${state_file}" STACK_DIR)"
+  [[ -n "${saved_dir}" ]] || return 0
+  saved_dir="$(realpath -m -- "${saved_dir}")"
+  project_dir="$(realpath -m -- "${project_dir}")"
+  [[ "${saved_dir}" == "${project_dir}" ]] && rm -f -- "${state_file}"
+}
 
 usage() {
   cat <<'EOF'
@@ -173,9 +243,10 @@ read_inputs() {
   printf '\nCấu hình Cloudflare Tunnel đang được quản lý qua Cloudflare Dashboard.\n'
   local saved_domain
   saved_domain="$(read_config_value DOMAIN)"
-  local default_domain="${saved_domain:-${DEFAULT_DOMAIN:-}}"
-  read -r -p "Domain gốc (để trống nếu cấu hình sau) [${default_domain:-chưa cấu hình}]: " DOMAIN
-  DOMAIN="${DOMAIN:-${default_domain}}"
+  local default_domain="${saved_domain:-${DOMAIN:-${DEFAULT_DOMAIN:-}}}"
+  local entered_domain
+  read -r -p "Domain gốc (để trống nếu cấu hình sau) [${default_domain:-chưa cấu hình}]: " entered_domain
+  DOMAIN="${entered_domain:-${default_domain}}"
   if [[ -n "${DOMAIN}" ]]; then
     [[ "${DOMAIN}" =~ ^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$ ]] || die "Domain không hợp lệ. Chỉ nhập domain, không thêm https:// hoặc hostname con."
   fi
@@ -320,6 +391,7 @@ write_config_value() {
   chown root:root "${tmp}"
   chmod 0600 "${tmp}"
   mv -f "${tmp}" "${file}"
+  write_source_state_from_env
 }
 
 compose() {
@@ -569,15 +641,17 @@ restore_project_data() {
 }
 
 wipe_project() {
-  local real_dir home_real confirmation
+  local real_dir home_real confirmation source_dir
   real_dir="$(realpath -e "${STACK_DIR}")"
   home_real="$(realpath -e "${PROJECT_HOME}")"
+  source_dir="$(read_config_value SOURCE_REPO_DIR)"
   [[ "${real_dir}" == "${home_real}/"* && -f "${real_dir}/.project-managed" && "$(cat "${real_dir}/.project-managed")" == "${PROJECT_SLUG}" ]] || die "Kiểm tra an toàn thất bại; không xóa thư mục không được installer quản lý."
   [[ "${real_dir}" != "${home_real}" && "${real_dir}" != / && ! -L "${STACK_DIR}" ]] || die "Từ chối xóa home, root hoặc symlink."
   printf '\nSẼ XÓA VĨNH VIỄN toàn bộ dự án và dữ liệu, secrets, backups tại:\n  %s\n' "${real_dir}"
   read -r -p "Gõ WIPE ${PROJECT_SLUG} để xác nhận: " confirmation
   [[ "${confirmation}" == "WIPE ${PROJECT_SLUG}" ]] || { printf 'Đã hủy.\n'; return; }
   compose --profile all down
+  remove_source_state_for_project "${source_dir}" "${real_dir}"
   cd "${PROJECT_HOME}"
   rm -rf --one-file-system -- "${real_dir}"
   log "Đã xóa dự án ${PROJECT_SLUG}."
@@ -626,6 +700,7 @@ PROJECT_NAME=${PROJECT_NAME}
 PROJECT_SLUG=${PROJECT_SLUG}
 PROJECT_HOME=${PROJECT_HOME}
 PROJECT_RELATIVE_DIR=${PROJECT_RELATIVE_DIR}
+SOURCE_REPO_DIR=${SCRIPT_DIR}
 DOMAIN=${DOMAIN}
 DATA_DIR=${DATA_DIR}
 TUNNEL_ENABLED=${TUNNEL_ENABLED}
@@ -704,6 +779,7 @@ deploy_main() {
 
   require_root
   check_os "${expected}"
+  load_source_config
   if command -v git >/dev/null 2>&1 && git -c safe.directory="${SCRIPT_DIR}" -C "${SCRIPT_DIR}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     local source_branch source_commit source_remote
     source_branch="$(git -c safe.directory="${SCRIPT_DIR}" -C "${SCRIPT_DIR}" branch --show-current)"
@@ -728,5 +804,6 @@ deploy_main() {
   save_secret
   write_compose_config
   deploy_stack
+  write_source_state_from_env
   print_summary
 }
