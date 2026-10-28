@@ -14,7 +14,7 @@ EDGE_NETWORK="${EDGE_NETWORK:-}"
 APP_NETWORK="${APP_NETWORK:-}"
 EDGE_SUBNET="${EDGE_SUBNET:-}"
 APP_SUBNET="${APP_SUBNET:-}"
-UPDATE_REPO="${UPDATE_REPO:-https://github.com/tungtk0021/ubuntu-deploy}"
+UPDATE_REPO="${UPDATE_REPO:-}"
 UPDATE_BRANCH="${UPDATE_BRANCH:-main}"
 INSTALLED_COMMIT="${INSTALLED_COMMIT:-}"
 TUNNEL_ENABLED="${TUNNEL_ENABLED:-}"
@@ -33,8 +33,11 @@ Cách dùng:
 
 Tùy chọn qua biến môi trường:
   PROJECT_HOME    Home chứa dự án (mặc định home của người gọi sudo)
-  EDGE_SUBNET     Docker network cho Tunnel/NPM/Portainer (10.1.1.0/24)
-  APP_SUBNET      Docker network cho ứng dụng (10.1.2.0/24)
+  DEFAULT_DOMAIN  Domain mặc định (không đặt thì domain để trống)
+  UPDATE_REPO     HTTPS URL GitHub dùng kiểm tra cập nhật (mặc định lấy remote origin)
+  UPDATE_BRANCH   Nhánh GitHub cần theo dõi (mặc định main)
+  EDGE_SUBNET     Docker network cho Tunnel/NPM/Portainer (172.20.0.0/24)
+  APP_SUBNET      Docker network cho ứng dụng (172.21.0.0/24)
 
 Không truyền Cloudflare Tunnel token qua command line hoặc biến môi trường.
 EOF
@@ -153,8 +156,8 @@ choose_project_location() {
   TOKEN_FILE="${STACK_DIR}/secrets/cloudflare-tunnel-token"
   EDGE_NETWORK="${EDGE_NETWORK:-infra_edge}"
   APP_NETWORK="${APP_NETWORK:-infra_apps}"
-  EDGE_SUBNET="${EDGE_SUBNET:-10.1.1.0/24}"
-  APP_SUBNET="${APP_SUBNET:-10.1.2.0/24}"
+  EDGE_SUBNET="${EDGE_SUBNET:-172.20.0.0/24}"
+  APP_SUBNET="${APP_SUBNET:-172.21.0.0/24}"
 }
 
 validate_paths() {
@@ -171,10 +174,12 @@ read_inputs() {
   printf '\nCấu hình Cloudflare Tunnel đang được quản lý qua Cloudflare Dashboard.\n'
   local saved_domain
   saved_domain="$(read_config_value DOMAIN)"
-  local default_domain="${saved_domain:-${DEFAULT_DOMAIN:-pn.id.vn}}"
-  read -r -p "Domain gốc (ví dụ pn.id.vn) [${default_domain}]: " DOMAIN
+  local default_domain="${saved_domain:-${DEFAULT_DOMAIN:-}}"
+  read -r -p "Domain gốc (để trống nếu cấu hình sau) [${default_domain:-chưa cấu hình}]: " DOMAIN
   DOMAIN="${DOMAIN:-${default_domain}}"
-  [[ "${DOMAIN}" =~ ^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$ ]] || die "Domain không hợp lệ. Chỉ nhập domain, không thêm https:// hoặc hostname con."
+  if [[ -n "${DOMAIN}" ]]; then
+    [[ "${DOMAIN}" =~ ^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$ ]] || die "Domain không hợp lệ. Chỉ nhập domain, không thêm https:// hoặc hostname con."
+  fi
 
   mkdir -p "${STACK_DIR}/secrets"
   chmod 700 "${STACK_DIR}/secrets"
@@ -393,14 +398,19 @@ BRANCH="$(env_value UPDATE_BRANCH)"
 LOCAL_COMMIT="$(env_value INSTALLED_COMMIT)"
 TUNNEL_ENABLED="$(env_value TUNNEL_ENABLED)"
 [[ "${SLUG}" =~ ^[a-z0-9][a-z0-9_-]{0,47}$ ]] || { echo "PROJECT_SLUG không hợp lệ" >&2; exit 1; }
-REPO="${REPO:-https://github.com/tungtk0021/ubuntu-deploy}"
+REPO="${REPO:-}"
 BRANCH="${BRANCH:-main}"
 API_REPO="${REPO#https://github.com/}"
 API_REPO="${API_REPO%.git}"
+API_REPO="${API_REPO%/}"
 API_REF="${BRANCH//\//%2F}"
 STATE_FILE="${DIR}/.update-state"
 
-if [[ -t 0 ]] && command -v curl >/dev/null 2>&1; then
+if [[ -z "${REPO}" ]]; then
+  [[ ! -t 0 ]] || printf 'Chưa cấu hình UPDATE_REPO; bỏ qua kiểm tra GitHub.\n'
+elif [[ "${REPO}" != https://github.com/* ]]; then
+  [[ ! -t 0 ]] || printf 'UPDATE_REPO phải là URL HTTPS của GitHub; bỏ qua kiểm tra cập nhật.\n'
+elif [[ -t 0 ]] && command -v curl >/dev/null 2>&1; then
   printf 'Đang kiểm tra bản cập nhật trên GitHub... '
   API_JSON="$(curl -fsSL --connect-timeout 3 --max-time 8 "https://api.github.com/repos/${API_REPO}/commits/${API_REF}" 2>/dev/null || true)"
   LATEST_COMMIT="$(printf '%s\n' "${API_JSON}" | sed -n 's/^[[:space:]]*"sha": "\([0-9a-f]\{40\}\)",$/\1/p' | head -n1)"
@@ -662,10 +672,6 @@ Thư mục dự án : ${STACK_DIR}
 Thư mục dữ liệu: ${DATA_DIR}
 Docker network : ${EDGE_NETWORK} (${EDGE_SUBNET}), ${APP_NETWORK} (${APP_SUBNET})
 
-Trong Cloudflare Zero Trust, thêm Public Hostname:
-  proxy.${DOMAIN}  -> HTTP  -> npm:81
-  ${DOMAIN}        -> HTTP  -> npm:80
-
 Không có cổng dịch vụ nào được publish trực tiếp lên host.
 Portainer và NPM yêu cầu tạo tài khoản quản trị ở lần đăng nhập đầu tiên.
 Không có tài khoản/mật khẩu mặc định được tạo bởi script.
@@ -674,6 +680,16 @@ Trong thư mục dự án có start.sh, stop.sh, manage.sh, compose.yaml, secret
 Chạy dự án: sudo ${STACK_DIR}/start.sh | Dừng toàn bộ: sudo ${STACK_DIR}/stop.sh
 Quản lý/đổi tên/khôi phục/xóa: sudo ${STACK_DIR}/manage.sh
 EOF
+  if [[ -n "${DOMAIN}" ]]; then
+    cat <<EOF
+
+Trong Cloudflare Zero Trust, thêm Public Hostname:
+  proxy.${DOMAIN}  -> HTTP  -> npm:81
+  ${DOMAIN}        -> HTTP  -> npm:80
+EOF
+  else
+    printf '\nDomain chưa cấu hình; đặt domain trong manage.sh rồi thêm Public Hostname trong Cloudflare Zero Trust.\n'
+  fi
   if [[ "${TUNNEL_ENABLED}" != yes ]]; then
     cat <<'EOF'
 

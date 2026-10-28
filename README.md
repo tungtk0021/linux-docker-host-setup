@@ -14,9 +14,9 @@ Không xóa một thư mục chỉ vì installer từ chối dùng nó. Các th�
 
 ## Cài đặt
 
+Clone repo từ tài khoản GitHub của bạn rồi chuyển vào thư mục clone:
+
 ```bash
-git clone https://github.com/tungtk0021/ubuntu-deploy.git
-cd ubuntu-deploy
 chmod +x deploy-ubuntu.sh deploy-debian.sh manage-config.sh update-project.sh remove-legacy.sh
 
 sudo ./deploy-ubuntu.sh
@@ -24,11 +24,11 @@ sudo ./deploy-ubuntu.sh
 sudo ./deploy-debian.sh
 ```
 
-Installer sẽ hỏi home và đường dẫn dự án trước, sau đó hỏi tên hiển thị và mã Docker. Nhấn Enter để nhận giá trị trong dấu `[...]`: mã/thư mục mặc định `docker-infra` (không trùng thư mục clone repo), home là tài khoản đã gọi `sudo` (hoặc `/root` nếu đăng nhập trực tiếp root), mạng là `infra_edge`/`infra_apps` với subnet `10.1.1.0/24`/`10.1.2.0/24`, domain mặc định `pn.id.vn`. Nếu home có đúng một dự án được đánh dấu `.project-managed`, installer tự chọn dự án đó làm đường dẫn mặc định; các giá trị tên, mã, mạng, domain và token đã lưu được giữ khi nhấn Enter. Tất cả cấu hình, token, dữ liệu, backup và lệnh quản lý được đặt trong thư mục dự án.
+Installer sẽ hỏi home và đường dẫn dự án trước, sau đó hỏi tên hiển thị và mã Docker. Nhấn Enter để nhận giá trị trong dấu `[...]`: mã/thư mục mặc định `docker-infra` (không trùng thư mục clone repo), home là tài khoản đã gọi `sudo` (hoặc `/root` nếu đăng nhập trực tiếp root), mạng là `infra_edge`/`infra_apps` với subnet mẫu `172.20.0.0/24` và `172.21.0.0/24`. Không có domain mặc định; nhấn Enter để cấu hình sau. Nếu home có đúng một dự án được đánh dấu `.project-managed`, installer tự chọn dự án đó làm đường dẫn mặc định; các giá trị tên, mã, mạng, domain và token đã lưu được giữ khi nhấn Enter. Tất cả cấu hình, token, dữ liệu, backup và lệnh quản lý được đặt trong thư mục dự án.
 
 Nếu dự án đã có token, nhấn Enter ở câu hỏi giữ token để dùng lại. Ở lần cài mới, không có token Cloudflare mặc định được nhúng trong repo; nhấn Enter ở ô token sẽ cài và chạy NPM/Portainer, đồng thời để Tunnel tắt. Có thể thêm token sau trong `manage.sh` → “Thay Cloudflare Tunnel token”; lần start tiếp theo sẽ chạy Tunnel. Token nhập được ẩn và lưu riêng trong `secrets/cloudflare-tunnel-token`, không nằm trong `.env` hoặc Compose.
 
-Có thể ghi đè mạng mặc định bằng `EDGE_NETWORK`, `APP_NETWORK`, `EDGE_SUBNET`, `APP_SUBNET` trước khi chạy.
+Các subnet trên chỉ là giá trị mẫu; kiểm tra chúng không trùng LAN, VPN hoặc Docker network khác. Có thể ghi đè bằng `EDGE_NETWORK`, `APP_NETWORK`, `EDGE_SUBNET`, `APP_SUBNET` trước khi chạy.
 
 Installer chỉ chấp nhận Ubuntu Server 22.04/24.04/26.04 LTS và Debian 12/13 chạy systemd; Ubuntu 20.04 và bản khác sẽ bị từ chối sớm. Một số lệnh nền hoặc tùy chọn có thể vắng mặt trên bản Minimal/phiên bản cũ: installer kiểm tra các lệnh cần thiết và báo gói APT đề xuất (`coreutils`, `mawk`, `sed`, `passwd`, `libc-bin`, `dpkg`, `findutils`) thay vì tiếp tục với lỗi khó hiểu. Nếu thiếu `curl`, installer thử cài; Git là tùy chọn. Nếu lúc cập nhật chọn tải code mà máy thiếu `tar`, cài bằng `sudo apt-get install tar`; lần start hiện tại vẫn tiếp tục với code cũ. Docker Compose plugin được kiểm tra trước khi dùng.
 
@@ -43,7 +43,7 @@ Nếu dự định đặt dữ liệu trên volume/NAS, hãy mount volume đó t
 
 Các lệnh này chỉ dùng Compose project name đã lưu của dự án đó, nên không dừng stack Docker khác trên máy.
 
-Khi có commit mới trên nhánh đã cài, `start.sh` cho chọn cập nhật ngay, hoãn 7 ngày, bỏ qua commit đó cho tới khi GitHub có commit mới, bỏ qua một lần hoặc thoát mà không start. Nếu bỏ qua trong 7 ngày thì các cập nhật mới khác cũng sẽ không được hỏi trong thời gian đó. Kiểm tra cần kết nối internet và `curl`; nếu GitHub không phản hồi, script tiếp tục khởi động phiên bản hiện tại. Chạy không có terminal tương tác cũng bỏ qua câu hỏi và start bình thường.
+Khi có commit mới trên nhánh đã cài, `start.sh` cho chọn cập nhật ngay, hoãn 7 ngày, bỏ qua commit đó cho tới khi GitHub có commit mới, bỏ qua một lần hoặc thoát mà không start. Nếu bỏ qua trong 7 ngày thì các cập nhật mới khác cũng sẽ không được hỏi trong thời gian đó. Installer tự lấy URL cập nhật từ remote `origin` nếu đó là GitHub. Nếu cài từ bản tải archive hoặc nguồn không phải GitHub, đặt `UPDATE_REPO=https://github.com/<OWNER>/<REPOSITORY>` trong `.env` để bật kiểm tra. Kiểm tra cần kết nối internet và `curl`; nếu GitHub không phản hồi, script tiếp tục khởi động phiên bản hiện tại. Chạy không có terminal tương tác cũng bỏ qua câu hỏi và start bình thường.
 
 ## Menu quản trị
 
