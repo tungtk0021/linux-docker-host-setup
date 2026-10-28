@@ -6,18 +6,27 @@ Công cụ cài Docker Engine, Docker Compose plugin, Nginx Proxy Manager (NPM),
 
 ```bash
 sudo apt-get update && sudo apt-get install -y git
-REPO_DIR=linux-docker-host-setup
-if [ -d "$REPO_DIR/.git" ]; then
-  git -C "$REPO_DIR" fetch origin &&
-    git -C "$REPO_DIR" checkout main &&
-    git -C "$REPO_DIR" pull --ff-only origin main || exit 1
-elif [ -e "$REPO_DIR" ]; then
-  echo "${REPO_DIR} đã tồn tại nhưng không phải bản clone Git; hãy kiểm tra thư mục trước khi tiếp tục."
-  exit 1
-else
-  git clone https://github.com/tungtk0021/linux-docker-host-setup.git "$REPO_DIR" || exit 1
-fi
-cd "$REPO_DIR"
+```
+
+Clone lần đầu:
+
+```bash
+git clone https://github.com/tungtk0021/linux-docker-host-setup.git
+cd linux-docker-host-setup
+```
+
+Thư mục clone đã tồn tại:
+
+```bash
+cd ~/linux-docker-host-setup
+git fetch origin
+git checkout main
+git pull --ff-only origin main
+```
+
+Chạy cài đặt:
+
+```bash
 chmod +x deploy-ubuntu.sh deploy-debian.sh manage-config.sh update-project.sh remove-legacy.sh
 sudo ./deploy-ubuntu.sh
 # hoặc
