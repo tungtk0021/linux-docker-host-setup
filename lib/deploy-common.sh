@@ -24,6 +24,7 @@ DEFAULT_PROJECT_DIR="${DEFAULT_PROJECT_DIR:-}"
 DEFAULT_PROJECT_NAME="${DEFAULT_PROJECT_NAME:-}"
 DEFAULT_PROJECT_SLUG="${DEFAULT_PROJECT_SLUG:-}"
 DEFAULT_DOMAIN="${DEFAULT_DOMAIN:-}"
+INSTALL_PROGRESS_STEP="${INSTALL_PROGRESS_STEP:-PROJECT_DIR}"
 readonly SECRET_GROUP="cloudflared-secret"
 
 log() { printf '\n[%s] %s\n' "$(date '+%H:%M:%S')" "$*"; }
@@ -76,6 +77,44 @@ load_source_config() {
       rm -f -- "${legacy_state}"
     fi
   fi
+}
+
+load_install_progress() {
+  local progress_file="${SCRIPT_DIR}/install-progress.conf"
+  if [[ ! -f "${progress_file}" ]]; then
+    INSTALL_PROGRESS_STEP=PROJECT_DIR
+    return 0
+  fi
+  INSTALL_PROGRESS_STEP="$(read_key_value "${progress_file}" INSTALL_PROGRESS_STEP)"
+  case "${INSTALL_PROGRESS_STEP}" in
+    PROJECT_DIR|PROJECT_NAME|PROJECT_SLUG|DOMAIN|TOKEN|INSTALL) ;;
+    *) die "Bước trong ${progress_file} không hợp lệ; hãy kiểm tra file trước khi tiếp tục." ;;
+  esac
+  PROJECT_RELATIVE_DIR="$(read_key_value "${progress_file}" PROJECT_RELATIVE_DIR)"
+  PROJECT_NAME="$(read_key_value "${progress_file}" PROJECT_NAME)"
+  PROJECT_SLUG="$(read_key_value "${progress_file}" PROJECT_SLUG)"
+  DOMAIN="$(read_key_value "${progress_file}" DOMAIN)"
+  log "Khôi phục tiến trình cài đặt từ ${progress_file}; tiếp tục tại bước ${INSTALL_PROGRESS_STEP}."
+}
+
+save_install_progress() {
+  local next_step="$1" progress_file="${SCRIPT_DIR}/install-progress.conf" tmp
+  tmp="$(mktemp "${progress_file}.tmp.XXXXXX")"
+  cat > "${tmp}" <<EOF
+INSTALL_PROGRESS_STEP=${next_step}
+PROJECT_RELATIVE_DIR=${PROJECT_RELATIVE_DIR}
+PROJECT_NAME=${PROJECT_NAME}
+PROJECT_SLUG=${PROJECT_SLUG}
+DOMAIN=${DOMAIN}
+EOF
+  chown root:root "${tmp}"
+  chmod 0600 "${tmp}"
+  mv -f "${tmp}" "${progress_file}"
+  INSTALL_PROGRESS_STEP="${next_step}"
+}
+
+clear_install_progress() {
+  rm -f -- "${SCRIPT_DIR}/install-progress.conf"
 }
 
 write_project_config() {
@@ -197,14 +236,16 @@ check_os() {
 
 choose_project_location() {
   [[ -t 0 ]] || die "Cần chạy tương tác để chọn tên và vị trí thư mục dự án."
-  local default_relative default_name saved_slug saved_name home_real resolved_target source_real marker config_file
+  local default_relative default_name saved_slug saved_name home_real resolved_target source_real marker config_file incomplete_install=0
   PROJECT_HOME="${DEFAULT_PROJECT_PARENT:-/home}"
   [[ "${PROJECT_HOME}" == /* && ! -L "${PROJECT_HOME}" ]] || die "DEFAULT_PROJECT_PARENT phải là đường dẫn tuyệt đối và không phải symlink."
   install -d -m 0755 "${PROJECT_HOME}"
   home_real="$(realpath -e "${PROJECT_HOME}")"
   default_relative="${PROJECT_RELATIVE_DIR:-${DEFAULT_PROJECT_DIR:-docker-infra}}"
-  read -r -p "Tên thư mục dự án dưới ${PROJECT_HOME} [${default_relative}]: " entered_relative
-  PROJECT_RELATIVE_DIR="${entered_relative:-${default_relative}}"
+  if [[ "${INSTALL_PROGRESS_STEP}" == PROJECT_DIR ]]; then
+    read -r -p "Tên thư mục dự án dưới ${PROJECT_HOME} (Enter để mặc định: ${default_relative}): " entered_relative
+    PROJECT_RELATIVE_DIR="${entered_relative:-${default_relative}}"
+  fi
   [[ "${PROJECT_RELATIVE_DIR}" =~ ^[a-z0-9][a-z0-9_-]{0,47}$ ]] || die "Nhập tên thư mục đơn bằng chữ thường, số, gạch ngang hoặc gạch dưới; không nhập đường dẫn đầy đủ."
   STACK_DIR="${home_real}/${PROJECT_RELATIVE_DIR}"
   resolved_target="$(realpath -m -- "${STACK_DIR}")"
@@ -213,8 +254,19 @@ choose_project_location() {
   [[ "${resolved_target}" != "${source_real}" && "${source_real}" != "${resolved_target}/"* ]] \
     || die "Thư mục dự án không được trùng hoặc bao gồm thư mục source repo: ${source_real}"
   [[ ! -L "${STACK_DIR}" ]] || die "Thư mục dự án không được là symlink: ${STACK_DIR}"
+  [[ "${INSTALL_PROGRESS_STEP}" != PROJECT_DIR ]] || save_install_progress PROJECT_NAME
   if [[ -e "${STACK_DIR}" ]]; then
-    [[ -f "${STACK_DIR}/.project-managed" ]] || die "Thư mục đích đã tồn tại và không có dấu quản lý của installer: ${STACK_DIR}"
+    if [[ -f "${STACK_DIR}/.project-managed" ]]; then
+      :
+    elif [[ -f "${STACK_DIR}/.install-in-progress" && ! -L "${STACK_DIR}/.install-in-progress" \
+      && "$(cat "${STACK_DIR}/.install-in-progress")" == "${source_real}" \
+      && "$(read_key_value "${SCRIPT_DIR}/install-progress.conf" PROJECT_RELATIVE_DIR)" == "${PROJECT_RELATIVE_DIR}" ]]; then
+      incomplete_install=1
+    else
+      die "Thư mục đích đã tồn tại và không có dấu quản lý của installer: ${STACK_DIR}"
+    fi
+  fi
+  if [[ -f "${STACK_DIR}/.project-managed" ]]; then
     marker="$(cat "${STACK_DIR}/.project-managed")"
     [[ "${marker}" =~ ^[a-z0-9][a-z0-9_-]{0,47}$ ]] || die "Dấu quản lý dự án bị lỗi; không tự ghi đè."
     [[ -f "${STACK_DIR}/.env" ]] || die "Thiếu .env trong dự án đã quản lý; hãy khôi phục cấu hình trước khi chạy installer."
@@ -233,16 +285,32 @@ choose_project_location() {
     PROJECT_SLUG="${PROJECT_SLUG:-${DEFAULT_PROJECT_SLUG:-${PROJECT_RELATIVE_DIR}}}"
     PROJECT_NAME="${PROJECT_NAME:-${DEFAULT_PROJECT_NAME:-${PROJECT_RELATIVE_DIR}}}"
   fi
-  default_name="${PROJECT_NAME:-${PROJECT_RELATIVE_DIR}}"
-  read -r -p "Tên hiển thị dự án [${default_name}]: " entered_name
-  PROJECT_NAME="${entered_name:-${default_name}}"
-  read -r -p "Mã dự án dùng cho Docker [${PROJECT_SLUG}]: " entered_slug
-  PROJECT_SLUG="${entered_slug:-${PROJECT_SLUG}}"
+  if [[ ! -e "${STACK_DIR}" ]]; then
+    install -d -m 0750 "${STACK_DIR}"
+    printf '%s' "${source_real}" > "${STACK_DIR}/.install-in-progress"
+    chown root:root "${STACK_DIR}/.install-in-progress"
+    chmod 0600 "${STACK_DIR}/.install-in-progress"
+  elif ((incomplete_install)); then
+    log "Tiếp tục cài đặt chưa hoàn tất tại ${STACK_DIR}."
+  fi
+  default_name="${PROJECT_NAME:-${DEFAULT_PROJECT_NAME:-${PROJECT_RELATIVE_DIR}}}"
+  if [[ "${INSTALL_PROGRESS_STEP}" == PROJECT_NAME ]]; then
+    read -r -p "Tên hiển thị dự án (Enter để mặc định: ${default_name}): " entered_name
+    PROJECT_NAME="${entered_name:-${default_name}}"
+    save_install_progress PROJECT_NAME
+  fi
   [[ -n "${PROJECT_NAME}" && "${PROJECT_NAME}" != *$'\n'* && "${PROJECT_NAME}" != *$'\r'* ]] || die "Tên hiển thị dự án không được để trống hoặc chứa xuống dòng."
+  [[ "${INSTALL_PROGRESS_STEP}" != PROJECT_NAME ]] || save_install_progress PROJECT_SLUG
+  if [[ "${INSTALL_PROGRESS_STEP}" == PROJECT_SLUG ]]; then
+    read -r -p "Mã dự án dùng cho Docker (Enter để mặc định: ${PROJECT_SLUG}): " entered_slug
+    PROJECT_SLUG="${entered_slug:-${PROJECT_SLUG}}"
+    save_install_progress PROJECT_SLUG
+  fi
   [[ "${PROJECT_SLUG}" =~ ^[a-z0-9][a-z0-9_-]{0,47}$ ]] || die "Mã dự án chỉ được gồm chữ thường, số, gạch ngang/gạch dưới; tối đa 48 ký tự."
-  if [[ -e "${STACK_DIR}" ]]; then
+  if [[ -f "${STACK_DIR}/.project-managed" ]]; then
     [[ "$(cat "${STACK_DIR}/.project-managed")" == "${PROJECT_SLUG}" ]] || die "Mã dự án khác cấu hình hiện có; hãy đổi trong manage.sh."
   fi
+  [[ "${INSTALL_PROGRESS_STEP}" != PROJECT_SLUG ]] || save_install_progress DOMAIN
   DATA_DIR="${STACK_DIR}/data"
   TOKEN_FILE="${STACK_DIR}/secrets/cloudflare-tunnel-token"
   EDGE_NETWORK="${EDGE_NETWORK:-infra_edge}"
@@ -261,38 +329,65 @@ read_inputs() {
     die "Cần chạy tương tác để nhập domain và Cloudflare Tunnel token an toàn."
   fi
   set +x
+  TUNNEL_TOKEN=""
 
   printf '\nCấu hình Cloudflare Tunnel đang được quản lý qua Cloudflare Dashboard.\n'
   local saved_domain
   saved_domain="$(read_config_value DOMAIN)"
   local default_domain="${saved_domain:-${DOMAIN:-${DEFAULT_DOMAIN:-}}}"
-  local entered_domain
-  read -r -p "Domain gốc (để trống nếu cấu hình sau) [${default_domain:-chưa cấu hình}]: " entered_domain
-  DOMAIN="${entered_domain:-${default_domain}}"
+  local entered_domain answer
+  if [[ "${INSTALL_PROGRESS_STEP}" == DOMAIN ]]; then
+    read -r -p "Domain gốc (Enter để mặc định: ${default_domain:-chưa cấu hình}; ví dụ: example.domain.com): " entered_domain
+    DOMAIN="${entered_domain:-${default_domain}}"
+    save_install_progress DOMAIN
+  fi
   if [[ -n "${DOMAIN}" ]]; then
     [[ "${DOMAIN}" =~ ^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$ ]] || die "Domain không hợp lệ. Chỉ nhập domain, không thêm https:// hoặc hostname con."
   fi
+  [[ "${INSTALL_PROGRESS_STEP}" != DOMAIN ]] || save_install_progress TOKEN
 
   mkdir -p "${STACK_DIR}/secrets"
   chmod 700 "${STACK_DIR}/secrets"
 
-  if [[ -s "${TOKEN_FILE}" ]]; then
-    read -r -p "Đã có Tunnel token. Giữ token đang lưu? [Y/n]: " answer
-    if [[ "${answer}" =~ ^([nN]|no|NO)$ ]]; then
-      read -r -s -p "Token mới (Enter để giữ token cũ): " TUNNEL_TOKEN
+  if [[ "${INSTALL_PROGRESS_STEP}" == TOKEN ]]; then
+    if [[ -s "${TOKEN_FILE}" ]]; then
+      read -r -p "Đã có Tunnel token (Enter giữ token đang lưu; n để thay): " answer
+      if [[ "${answer}" =~ ^([nN]|no|NO)$ ]]; then
+        read -r -s -p "Token mới (Enter để giữ token cũ; ví dụ: example.tokens): " TUNNEL_TOKEN
+        printf '\n'
+      fi
+    else
+      read -r -s -p "Cloudflare Tunnel token (Enter để chưa cấu hình; ví dụ: example.tokens): " TUNNEL_TOKEN
       printf '\n'
     fi
-    TUNNEL_ENABLED="yes"
-  else
-    read -r -s -p "Cloudflare Tunnel token (Enter để cấu hình sau): " TUNNEL_TOKEN
-    printf '\n'
-    if [[ -n "${TUNNEL_TOKEN}" ]]; then
+    if [[ -n "${TUNNEL_TOKEN:-}" ]]; then
+      save_pending_token
+      TUNNEL_ENABLED="yes"
+    elif [[ -s "${TOKEN_FILE}" ]]; then
       TUNNEL_ENABLED="yes"
     else
       TUNNEL_ENABLED="no"
       printf 'Chưa cấu hình token; NPM và Portainer sẽ được cài, Tunnel để tắt.\n'
     fi
+    save_install_progress INSTALL
+  elif [[ -s "${TOKEN_FILE}" ]]; then
+    TUNNEL_ENABLED="yes"
+  else
+    TUNNEL_ENABLED="no"
   fi
+}
+
+save_pending_token() {
+  local tmp
+  [[ -n "${TUNNEL_TOKEN:-}" ]] || return 0
+  install -d -m 0700 "$(dirname "${TOKEN_FILE}")"
+  umask 0077
+  tmp="$(mktemp "${TOKEN_FILE}.tmp.XXXXXX")"
+  printf '%s' "${TUNNEL_TOKEN}" > "${tmp}"
+  unset TUNNEL_TOKEN
+  chown root:root "${tmp}"
+  chmod 0600 "${tmp}"
+  mv -f "${tmp}" "${TOKEN_FILE}"
 }
 
 check_network_overlap() {
@@ -746,6 +841,7 @@ EOF
   chown root:root "${STACK_DIR}/.env" "${STACK_DIR}/compose.yaml"
   printf '%s' "${PROJECT_SLUG}" > "${STACK_DIR}/.project-managed"
   chmod 0640 "${STACK_DIR}/.project-managed"
+  rm -f -- "${STACK_DIR}/.install-in-progress"
   write_project_config
   write_project_helpers
 }
@@ -810,6 +906,7 @@ deploy_main() {
   require_root
   check_os "${expected}"
   load_source_config
+  load_install_progress
   if command -v git >/dev/null 2>&1 && git -c safe.directory="${SCRIPT_DIR}" -C "${SCRIPT_DIR}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     local source_branch source_commit source_remote
     source_branch="$(git -c safe.directory="${SCRIPT_DIR}" -C "${SCRIPT_DIR}" branch --show-current)"
@@ -835,5 +932,6 @@ deploy_main() {
   write_compose_config
   deploy_stack
   register_global_project
+  clear_install_progress
   print_summary
 }

@@ -3,5 +3,7 @@ secrets/
 *.bak
 global-config.conf
 global-config.conf.tmp.*
+install-progress.conf
+install-progress.conf.tmp.*
 project-state.conf
 project-state.conf.tmp.*
