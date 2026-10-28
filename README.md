@@ -43,13 +43,13 @@ Nếu dự định đặt dữ liệu trên volume/NAS, hãy mount volume đó t
 
 Các lệnh này chỉ dùng Compose project name đã lưu của dự án đó, nên không dừng stack Docker khác trên máy.
 
-Khi có commit mới trên nhánh đã cài, `start.sh` cho chọn cập nhật ngay, hoãn 7 ngày, bỏ qua commit đó cho tới khi GitHub có commit mới, bỏ qua một lần hoặc thoát mà không start. Nếu bỏ qua trong 7 ngày thì các cập nhật mới khác cũng sẽ không được hỏi trong thời gian đó. Installer tự lấy URL cập nhật từ remote `origin` nếu đó là GitHub. Nếu cài từ bản tải archive hoặc nguồn không phải GitHub, đặt `UPDATE_REPO=https://github.com/<OWNER>/<REPOSITORY>` trong `.env` để bật kiểm tra. Kiểm tra cần kết nối internet và `curl`; nếu GitHub không phản hồi, script tiếp tục khởi động phiên bản hiện tại. Chạy không có terminal tương tác cũng bỏ qua câu hỏi và start bình thường.
+Khi có commit mới trên nhánh GitHub của dự án, `start.sh` cho chọn cập nhật ngay, hoãn 7 ngày, bỏ qua commit đó cho tới khi có commit mới, bỏ qua một lần hoặc thoát mà không start. Nếu bỏ qua trong 7 ngày thì các cập nhật mới khác cũng sẽ không được hỏi trong thời gian đó. Kiểm tra cần kết nối internet và `curl`; nếu GitHub không phản hồi, script tiếp tục khởi động phiên bản hiện tại. Chạy không có terminal tương tác cũng bỏ qua câu hỏi và start bình thường.
 
 ## Menu quản trị
 
 Menu `manage.sh` hỗ trợ:
 
-1. Sửa domain (cần cập nhật Public Hostname thủ công trong Cloudflare Dashboard).
+1. Sửa domain (cần cập nhật Published application route trong Cloudflare Dashboard).
 2. Thay token Cloudflare và tạo lại riêng connector Tunnel.
 3. Áp dụng cấu hình Compose và khởi động toàn bộ dịch vụ.
 4. Đổi tên hiển thị, mã Docker và/hoặc vị trí thư mục trong cùng home. Stack sẽ dừng và được chuyển; khởi động lại bằng `start.sh` tại vị trí mới.
@@ -88,16 +88,18 @@ Updater xác nhận dự án qua `.project-managed`, sao lưu Compose và công 
 
 Updater chỉ cập nhật template có trong repo và image tag được khai báo tại `compose.yaml`; nó không tự thay đổi tag. Đọc release notes và ghi chú migration của dịch vụ trước khi nâng phiên bản có thay đổi schema. `start.sh` dùng cùng updater khi chọn cập nhật từ GitHub.
 
-## Cloudflare hostname
+## Cloudflare Tunnel và ứng dụng public
 
-Trong Cloudflare Zero Trust → Networks → Tunnels → chọn Tunnel → Public Hostnames, thêm:
+Trong Cloudflare Dashboard, mở **Networking → Tunnels**, chọn Tunnel của bạn, vào tab **Routes**, chọn **Add route → Published application**. Trong phần Hostname, chọn domain đang quản lý tại Cloudflare và nhập subdomain. Ở **Service URL**, nhập địa chỉ dịch vụ bên trong Docker network:
 
 | Hostname | Service |
 | --- | --- |
-| `proxy.example.com` | `HTTP` → `npm:81` |
-| `example.com` | `HTTP` → `npm:80` |
+| `proxy.example.com` | `http://npm:81` |
+| `example.com` | `http://npm:80` |
 
-Thay `example.com` bằng domain đã nhập. Muốn quản trị Portainer qua `docker.example.com`, tạo thêm hostname đến `npm:80`, sau đó cấu hình Proxy Host trong NPM trỏ đến `https://portainer:9443` và bật Websockets Support. Trình duyệt dùng HTTPS công khai qua Cloudflare.
+Thay `example.com` bằng zone của bạn. Thêm route `docker.example.com` đến `http://npm:80`, sau đó tạo Proxy Host tương ứng trong NPM trỏ đến `https://portainer:9443` và bật Websockets Support. Tunnel và NPM cùng nối vào Docker network `infra_edge`, nên `cloudflared` truy cập được tên dịch vụ `npm`. Cloudflare tạo DNS route cho hostname đã publish; không cần mở cổng dịch vụ trên router hoặc host.
+
+Cloudflare có thể tạo Tunnel mới tại **Networking → Tunnels → Create a tunnel**. Khi Tunnel đã kết nối, thêm route theo các bước trên. Xem [hướng dẫn Cloudflare tạo Tunnel và Published application route](https://developers.cloudflare.com/tunnel/get-started/).
 
 NPM và Portainer yêu cầu tạo tài khoản quản trị ở lần đăng nhập đầu tiên. Portainer được cấp Docker socket, quyền này gần tương đương root trên host; chỉ cho quản trị viên tin cậy truy cập. Portainer CE hướng tới homelab/học tập; hãy đánh giá giấy phép và hỗ trợ phù hợp trước khi dùng production. [Portainer CE](https://github.com/portainer/portainer#intended-use)
 

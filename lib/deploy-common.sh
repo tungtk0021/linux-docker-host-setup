@@ -34,7 +34,6 @@ Cách dùng:
 Tùy chọn qua biến môi trường:
   PROJECT_HOME    Home chứa dự án (mặc định home của người gọi sudo)
   DEFAULT_DOMAIN  Domain mặc định (không đặt thì domain để trống)
-  UPDATE_REPO     HTTPS URL GitHub dùng kiểm tra cập nhật (mặc định lấy remote origin)
   UPDATE_BRANCH   Nhánh GitHub cần theo dõi (mặc định main)
   EDGE_SUBNET     Docker network cho Tunnel/NPM/Portainer (172.20.0.0/24)
   APP_SUBNET      Docker network cho ứng dụng (172.21.0.0/24)
@@ -347,10 +346,10 @@ update_domain() {
   read -r -p "Domain gốc mới: " domain
   [[ "${domain}" =~ ^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$ ]] || die "Domain không hợp lệ. Chỉ nhập domain, không thêm https:// hoặc hostname con."
   write_config_value DOMAIN "${domain}"
-  printf '\nĐã lưu domain %s. Cần cập nhật Public Hostname thủ công trong Cloudflare Zero Trust:\n' "${domain}"
-  printf '  proxy.%s -> HTTP -> npm:81\n' "${domain}"
-  printf '  %s -> HTTP -> npm:80\n' "${domain}"
-  printf '  docker.%s -> HTTP -> npm:80 (sau đó cập nhật Proxy Host trong NPM)\n' "${domain}"
+  printf '\nĐã lưu domain %s. Cập nhật Published application routes tại Cloudflare Dashboard → Networking → Tunnels → chọn Tunnel → Routes:\n' "${domain}"
+  printf '  proxy.%s -> http://npm:81\n' "${domain}"
+  printf '  %s -> http://npm:80\n' "${domain}"
+  printf '  docker.%s -> http://npm:80, sau đó cập nhật Proxy Host trong NPM\n' "${domain}"
 }
 
 replace_tunnel_token() {
@@ -683,12 +682,12 @@ EOF
   if [[ -n "${DOMAIN}" ]]; then
     cat <<EOF
 
-Trong Cloudflare Zero Trust, thêm Public Hostname:
-  proxy.${DOMAIN}  -> HTTP  -> npm:81
-  ${DOMAIN}        -> HTTP  -> npm:80
+Trong Cloudflare Dashboard → Networking → Tunnels → chọn Tunnel → Routes, thêm Published application:
+  proxy.${DOMAIN}  -> http://npm:81
+  ${DOMAIN}        -> http://npm:80
 EOF
   else
-    printf '\nDomain chưa cấu hình; đặt domain trong manage.sh rồi thêm Public Hostname trong Cloudflare Zero Trust.\n'
+    printf '\nDomain chưa cấu hình; đặt domain trong manage.sh rồi thêm Published application route tại Cloudflare Dashboard → Networking → Tunnels → Routes.\n'
   fi
   if [[ "${TUNNEL_ENABLED}" != yes ]]; then
     cat <<'EOF'
