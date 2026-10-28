@@ -6,13 +6,7 @@ Công cụ cài Docker Engine, Docker Compose plugin, Nginx Proxy Manager (NPM),
 
 ```bash
 sudo apt-get update && sudo apt-get install -y git
-if [ -d ubuntu-deploy/.git ]; then
-  git -C ubuntu-deploy fetch origin
-  git -C ubuntu-deploy checkout main
-  git -C ubuntu-deploy pull --ff-only origin main
-else
-  git clone https://github.com/tungtk0021/ubuntu-deploy.git
-fi
+git clone https://github.com/tungtk0021/ubuntu-deploy.git
 cd ubuntu-deploy
 chmod +x deploy-ubuntu.sh deploy-debian.sh manage-config.sh update-project.sh remove-legacy.sh
 sudo ./deploy-ubuntu.sh
