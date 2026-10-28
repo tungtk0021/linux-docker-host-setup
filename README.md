@@ -24,9 +24,13 @@ sudo ./deploy-ubuntu.sh
 sudo ./deploy-debian.sh
 ```
 
-Installer sẽ hỏi tên hiển thị, mã Docker và vị trí thư mục dự án bên trong home. Mặc định home là tài khoản đã gọi `sudo` (hoặc `/root` nếu đăng nhập trực tiếp root). Mã dự án chỉ chấp nhận chữ thường, số, `_` và `-`. Tất cả cấu hình, token, dữ liệu, backup và lệnh quản lý được đặt trong thư mục dự án.
+Installer sẽ hỏi home và đường dẫn dự án trước, sau đó hỏi tên hiển thị và mã Docker. Nhấn Enter để nhận giá trị trong dấu `[...]`: mã/thư mục mặc định `docker-infra` (không trùng thư mục clone repo), home là tài khoản đã gọi `sudo` (hoặc `/root` nếu đăng nhập trực tiếp root), mạng là `infra_edge`/`infra_apps` với subnet `10.1.1.0/24`/`10.1.2.0/24`, domain mặc định `pn.id.vn`. Nếu home có đúng một dự án được đánh dấu `.project-managed`, installer tự chọn dự án đó làm đường dẫn mặc định; các giá trị tên, mã, mạng, domain và token đã lưu được giữ khi nhấn Enter. Tất cả cấu hình, token, dữ liệu, backup và lệnh quản lý được đặt trong thư mục dự án.
 
-Sau đó nhập domain gốc và Cloudflare Tunnel token (token được nhập ẩn). Token lưu trong `secrets/cloudflare-tunnel-token` với quyền hạn chế, tách khỏi `.env` và Compose. Mạng Docker mặc định là `infra_edge` (`10.1.1.0/24`) và `infra_apps` (`10.1.2.0/24`); có thể chỉnh bằng `EDGE_NETWORK`, `APP_NETWORK`, `EDGE_SUBNET`, `APP_SUBNET` trước khi chạy.
+Nếu dự án đã có token, nhấn Enter ở câu hỏi giữ token để dùng lại. Ở lần cài mới, không có token Cloudflare mặc định được nhúng trong repo; nhấn Enter ở ô token sẽ cài và chạy NPM/Portainer, đồng thời để Tunnel tắt. Có thể thêm token sau trong `manage.sh` → “Thay Cloudflare Tunnel token”; lần start tiếp theo sẽ chạy Tunnel. Token nhập được ẩn và lưu riêng trong `secrets/cloudflare-tunnel-token`, không nằm trong `.env` hoặc Compose.
+
+Có thể ghi đè mạng mặc định bằng `EDGE_NETWORK`, `APP_NETWORK`, `EDGE_SUBNET`, `APP_SUBNET` trước khi chạy.
+
+Installer chỉ chấp nhận Ubuntu Server 22.04/24.04/26.04 LTS và Debian 12/13 chạy systemd; Ubuntu 20.04 và bản khác sẽ bị từ chối sớm. Một số lệnh nền hoặc tùy chọn có thể vắng mặt trên bản Minimal/phiên bản cũ: installer kiểm tra các lệnh cần thiết và báo gói APT đề xuất (`coreutils`, `mawk`, `sed`, `passwd`, `libc-bin`, `dpkg`, `findutils`) thay vì tiếp tục với lỗi khó hiểu. Nếu thiếu `curl`, installer thử cài; Git là tùy chọn. Nếu lúc cập nhật chọn tải code mà máy thiếu `tar`, cài bằng `sudo apt-get install tar`; lần start hiện tại vẫn tiếp tục với code cũ. Docker Compose plugin được kiểm tra trước khi dùng.
 
 Nếu dự định đặt dữ liệu trên volume/NAS, hãy mount volume đó trước và chọn thư mục dự án nằm trên volume được mount. Installer không tự chỉnh `/etc/fstab` hay mount NAS. Không có cổng dịch vụ nào được publish trực tiếp lên host; Cloudflare Tunnel kết nối qua Docker network.
 
@@ -73,12 +77,12 @@ Lấy phiên bản mới của repo bằng Git, rồi chạy updater với đư�
 ```bash
 cd ~/ubuntu-deploy
 git fetch origin
-git switch codex/ubuntu-debian-rework
-git pull --ff-only
+git checkout main
+git pull --ff-only origin main
 sudo ./update-project.sh /home/USER/PROJECT_SLUG
 ```
 
-Nhánh có script updater hiện tại là `codex/ubuntu-debian-rework`. Nếu nhánh này được merge vào nhánh mặc định sau đó, có thể cập nhật theo nhánh mặc định thay cho lệnh `git switch` ở trên.
+Nhánh chính để cài và nhận cập nhật là `main`. Nếu `git` chưa có trên máy chủ, cài bằng `sudo apt-get update && sudo apt-get install -y git` trước khi cập nhật repo. Git không bắt buộc để chạy stack hoặc kiểm tra bản mới lúc start; việc kiểm tra tự dùng GitHub HTTPS.
 
 Updater xác nhận dự án qua `.project-managed`, sao lưu Compose và công cụ quản trị cũ vào `backups/pre-update-*`, kiểm tra cấu hình, tải image và áp dụng Compose. `.env`, token và `data/` được giữ nguyên. Nếu kiểm tra cấu hình hoặc tải image thất bại, template trước cập nhật được phục hồi. Nếu `up` lỗi giữa lúc áp dụng, kiểm tra log và bản lưu trước khi thử lại.
 

@@ -6,7 +6,7 @@ die() { printf 'LỖI: %s\n' "$*" >&2; exit 1; }
 log() { printf '\n[%s] %s\n' "$(date '+%H:%M:%S')" "$*"; }
 
 [[ ${EUID} -eq 0 ]] || die "Hãy chạy bằng sudo: sudo $0 /duong/dan/du-an"
-[[ $# -ge 1 && $# -le 2 ]] || die "Cách dùng: sudo $0 /duong/dan/du-an [commit-40-ky-tu]"
+[[ $# -ge 1 && $# -le 3 ]] || die "Cách dùng: sudo $0 /duong/dan/du-an [commit-40-ky-tu] [nhanh-Git]"
 command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1 || die "Cần Docker Compose plugin hoạt động."
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
@@ -23,10 +23,15 @@ read_env() {
 PROJECT_SLUG="$(read_env PROJECT_SLUG)"
 PROJECT_HOME="$(read_env PROJECT_HOME)"
 SOURCE_COMMIT="${2:-}"
+SOURCE_BRANCH="${3:-}"
 if [[ -z "${SOURCE_COMMIT}" ]] && command -v git >/dev/null 2>&1; then
   SOURCE_COMMIT="$(git -c safe.directory="${SCRIPT_DIR}" -C "${SCRIPT_DIR}" rev-parse HEAD 2>/dev/null || true)"
 fi
+if [[ -z "${SOURCE_BRANCH}" ]] && command -v git >/dev/null 2>&1; then
+  SOURCE_BRANCH="$(git -c safe.directory="${SCRIPT_DIR}" -C "${SCRIPT_DIR}" branch --show-current 2>/dev/null || true)"
+fi
 [[ -z "${SOURCE_COMMIT}" || "${SOURCE_COMMIT}" =~ ^[0-9a-f]{40}$ ]] || die "Commit nguồn phải là SHA-1 gồm 40 ký tự hex."
+[[ -z "${SOURCE_BRANCH}" || ( "${SOURCE_BRANCH}" =~ ^[A-Za-z0-9._/-]+$ && "${SOURCE_BRANCH}" != *..* ) ]] || die "Tên nhánh nguồn không hợp lệ."
 [[ "${PROJECT_SLUG}" =~ ^[a-z0-9][a-z0-9_-]{0,47}$ ]] || die "PROJECT_SLUG trong .env không hợp lệ."
 [[ "$(cat "${PROJECT_DIR}/.project-managed")" == "${PROJECT_SLUG}" ]] || die "Dấu quản lý không khớp với PROJECT_SLUG."
 [[ "${PROJECT_HOME}" == /* && -d "${PROJECT_HOME}" ]] || die "PROJECT_HOME trong .env không hợp lệ."
@@ -54,30 +59,44 @@ restore_templates() {
 
 STACK_DIR="${PROJECT_DIR}"
 source "${SCRIPT_DIR}/lib/deploy-common.sh"
+TUNNEL_ENABLED="$(read_env TUNNEL_ENABLED)"
+TOKEN_FILE="${PROJECT_DIR}/secrets/cloudflare-tunnel-token"
+if [[ -z "${TUNNEL_ENABLED}" ]]; then
+  if [[ -s "${TOKEN_FILE}" ]]; then TUNNEL_ENABLED=yes; else TUNNEL_ENABLED=no; fi
+fi
+if [[ "${TUNNEL_ENABLED}" == yes && -s "${TOKEN_FILE}" ]]; then
+  PROFILE_ARGS=(--profile all)
+else
+  PROFILE_ARGS=(--profile npm --profile portainer)
+fi
 
 log "Đang cập nhật template cho ${PROJECT_SLUG}; dữ liệu, .env và Tunnel token được giữ nguyên."
 install -m 0640 "${SCRIPT_DIR}/compose.yaml" "${PROJECT_DIR}/compose.yaml"
 write_project_helpers
 
 if ! docker compose --project-directory "${PROJECT_DIR}" -f "${PROJECT_DIR}/compose.yaml" \
-  -p "${PROJECT_SLUG}" --profile all config --quiet; then
+  -p "${PROJECT_SLUG}" "${PROFILE_ARGS[@]}" config --quiet; then
   restore_templates
   die "Cấu hình Compose mới không hợp lệ; đã phục hồi template cũ. Bản lưu: ${BACKUP_DIR}"
 fi
 
 if ! docker compose --project-directory "${PROJECT_DIR}" -f "${PROJECT_DIR}/compose.yaml" \
-  -p "${PROJECT_SLUG}" --profile all pull; then
+  -p "${PROJECT_SLUG}" "${PROFILE_ARGS[@]}" pull; then
   restore_templates
   die "Không tải được image; đã phục hồi template cũ. Bản lưu: ${BACKUP_DIR}"
 fi
 
 if ! docker compose --project-directory "${PROJECT_DIR}" -f "${PROJECT_DIR}/compose.yaml" \
-  -p "${PROJECT_SLUG}" --profile all up -d; then
+  -p "${PROJECT_SLUG}" "${PROFILE_ARGS[@]}" up -d; then
   restore_templates
   die "Khởi chạy sau cập nhật thất bại. Đã phục hồi template cũ; kiểm tra dịch vụ và bản lưu tại ${BACKUP_DIR}."
 fi
 
 log "Cập nhật xong. Bản template trước cập nhật được giữ tại ${BACKUP_DIR}."
+write_config_value TUNNEL_ENABLED "${TUNNEL_ENABLED}"
+if [[ -n "${SOURCE_BRANCH}" ]]; then
+  write_config_value UPDATE_BRANCH "${SOURCE_BRANCH}"
+fi
 if [[ -n "${SOURCE_COMMIT}" ]]; then
   write_config_value INSTALLED_COMMIT "${SOURCE_COMMIT}"
   log "Đã ghi nhận commit ${SOURCE_COMMIT:0:12} cho lần kiểm tra GitHub tiếp theo."

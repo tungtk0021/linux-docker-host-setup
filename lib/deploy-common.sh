@@ -15,8 +15,9 @@ APP_NETWORK="${APP_NETWORK:-}"
 EDGE_SUBNET="${EDGE_SUBNET:-}"
 APP_SUBNET="${APP_SUBNET:-}"
 UPDATE_REPO="${UPDATE_REPO:-https://github.com/tungtk0021/ubuntu-deploy}"
-UPDATE_BRANCH="${UPDATE_BRANCH:-codex/ubuntu-debian-rework}"
+UPDATE_BRANCH="${UPDATE_BRANCH:-main}"
 INSTALLED_COMMIT="${INSTALLED_COMMIT:-}"
+TUNNEL_ENABLED="${TUNNEL_ENABLED:-}"
 readonly SECRET_GROUP="cloudflared-secret"
 
 log() { printf '\n[%s] %s\n' "$(date '+%H:%M:%S')" "$*"; }
@@ -43,6 +44,12 @@ require_root() {
   [[ ${EUID} -eq 0 ]] || die "Hãy chạy script bằng sudo hoặc tài khoản root."
   command -v apt-get >/dev/null 2>&1 || die "Chỉ hỗ trợ hệ Debian/Ubuntu dùng APT."
   command -v systemctl >/dev/null 2>&1 || die "Không tìm thấy systemd; script yêu cầu máy chủ dùng systemd."
+  local cmd missing=()
+  for cmd in dpkg dpkg-query realpath awk sed cut tr head install mktemp getent groupadd chown chmod basename dirname date cat mkdir cp mv rm find; do
+    command -v "${cmd}" >/dev/null 2>&1 || missing+=("${cmd}")
+  done
+  ((${#missing[@]} == 0)) || die "Thiếu lệnh hệ thống: ${missing[*]}. Trên Ubuntu/Debian Minimal, thử: sudo apt-get update && sudo apt-get install -y coreutils mawk sed passwd libc-bin dpkg findutils."
+  realpath -m / >/dev/null 2>&1 || die "Lệnh realpath không hỗ trợ tùy chọn -m; hãy cập nhật gói coreutils của hệ điều hành."
 }
 
 check_os() {
@@ -81,46 +88,73 @@ check_os() {
 
 choose_project_location() {
   [[ -t 0 ]] || die "Cần chạy tương tác để chọn tên và vị trí thư mục dự án."
-  local caller="${SUDO_USER:-root}" caller_home default_slug default_name
+  local caller="${SUDO_USER:-root}" caller_home default_slug default_name saved_slug saved_home part home_real resolved_target walk marker default_relative candidate
+  local -a managed_markers=() parts=()
   caller_home="$(getent passwd "${caller}" | cut -d: -f6)"
   caller_home="${caller_home:-/root}"
   PROJECT_HOME="${PROJECT_HOME:-${caller_home}}"
   [[ "${PROJECT_HOME}" == /* && -d "${PROJECT_HOME}" && ! -L "${PROJECT_HOME}" ]] || die "PROJECT_HOME phải là thư mục home tuyệt đối đã tồn tại và không phải symlink."
-  default_slug="$(basename "${SCRIPT_DIR:-ubuntu-deploy}" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9_-]/-/g; s/^[^a-z0-9]*//; s/[^a-z0-9]*$//')"
-  default_slug="${default_slug:-docker-infra}"
-  default_name="${PROJECT_NAME:-${default_slug}}"
-  read -r -p "Tên hiển thị dự án [${default_name}]: " PROJECT_NAME
-  PROJECT_NAME="${PROJECT_NAME:-${default_name}}"
-  [[ -n "${PROJECT_NAME}" && "${PROJECT_NAME}" != *$'\n'* && "${PROJECT_NAME}" != *$'\r'* ]] || die "Tên hiển thị dự án không được để trống hoặc chứa xuống dòng."
-  read -r -p "Mã dự án dùng cho Docker [${default_slug}]: " PROJECT_SLUG
-  PROJECT_SLUG="${PROJECT_SLUG:-${default_slug}}"
-  [[ "${PROJECT_SLUG}" =~ ^[a-z0-9][a-z0-9_-]{0,47}$ ]] || die "Mã dự án chỉ được gồm chữ thường, số, gạch ngang/gạch dưới; tối đa 48 ký tự."
+  default_slug="${PROJECT_SLUG:-docker-infra}"
+  home_real="$(realpath -e "${PROJECT_HOME}")"
+  default_relative="${PROJECT_RELATIVE_DIR:-${PROJECT_SLUG:-${default_slug}}}"
+  if [[ -z "${PROJECT_RELATIVE_DIR:-}" && -z "${PROJECT_SLUG:-}" && ! -e "${PROJECT_HOME}/${default_relative}" ]]; then
+    mapfile -t managed_markers < <(find "${home_real}" -mindepth 2 -maxdepth 4 -type f -name .project-managed -print 2>/dev/null)
+    if ((${#managed_markers[@]} == 1)); then
+      candidate="${managed_markers[0]%/.project-managed}"
+      if [[ "${candidate}" == "${home_real}/"* ]]; then
+        default_relative="${candidate#"${home_real}/"}"
+      fi
+    fi
+  fi
   read -r -p "Home dự án [${PROJECT_HOME}]: " entered_home
   PROJECT_HOME="${entered_home:-${PROJECT_HOME}}"
   [[ "${PROJECT_HOME}" == /* && -d "${PROJECT_HOME}" && ! -L "${PROJECT_HOME}" ]] || die "Home dự án phải là thư mục tuyệt đối đã tồn tại và không phải symlink."
-  read -r -p "Đường dẫn thư mục dự án bên trong home [${PROJECT_SLUG}]: " PROJECT_RELATIVE_DIR
-  PROJECT_RELATIVE_DIR="${PROJECT_RELATIVE_DIR:-${PROJECT_SLUG}}"
+  read -r -p "Đường dẫn thư mục dự án bên trong home [${default_relative}]: " entered_relative
+  PROJECT_RELATIVE_DIR="${entered_relative:-${default_relative}}"
   [[ "${PROJECT_RELATIVE_DIR}" != /* && "${PROJECT_RELATIVE_DIR}" != *:* && "${PROJECT_RELATIVE_DIR}" != *[[:space:]]* ]] || die "Đường dẫn dự án phải tương đối, không có khoảng trắng hoặc dấu hai chấm."
-  local part
   IFS=/ read -ra parts <<< "${PROJECT_RELATIVE_DIR}"
   for part in "${parts[@]}"; do [[ -n "${part}" && "${part}" != . && "${part}" != .. ]] || die "Đường dẫn dự án không được chứa thành phần rỗng, . hoặc .."; done
   STACK_DIR="${PROJECT_HOME}/${PROJECT_RELATIVE_DIR}"
-  local home_real resolved_target
   home_real="$(realpath -e "${PROJECT_HOME}")"
   resolved_target="$(realpath -m -- "${STACK_DIR}")"
   [[ "${resolved_target}" == "${home_real}/"* ]] || die "Đường dẫn dự án phải nằm bên trong home đã chọn."
-  local walk="${home_real}"
+  walk="${home_real}"
   for part in "${parts[@]}"; do walk="${walk}/${part}"; [[ ! -L "${walk}" ]] || die "Đường dẫn dự án không được đi qua symlink: ${walk}"; done
+  if [[ -e "${STACK_DIR}" ]]; then
+    [[ -f "${STACK_DIR}/.project-managed" ]] || die "Thư mục đích đã tồn tại và không có dấu quản lý của installer: ${STACK_DIR}"
+    marker="$(cat "${STACK_DIR}/.project-managed")"
+    [[ "${marker}" =~ ^[a-z0-9][a-z0-9_-]{0,47}$ ]] || die "Dấu quản lý dự án bị lỗi; không tự ghi đè."
+    [[ -f "${STACK_DIR}/.env" ]] || die "Thiếu .env trong dự án đã quản lý; hãy khôi phục cấu hình trước khi chạy installer."
+    saved_slug="$(read_config_value PROJECT_SLUG)"
+    [[ "${saved_slug}" == "${marker}" ]] || die "Mã dự án trong .env không khớp dấu quản lý; hãy sửa qua manage.sh trước."
+    PROJECT_SLUG="${PROJECT_SLUG:-${saved_slug}}"
+    PROJECT_NAME="${PROJECT_NAME:-$(read_config_value PROJECT_NAME)}"
+    saved_home="$(read_config_value PROJECT_HOME)"
+    [[ -z "${saved_home}" || "$(realpath -e "${saved_home}" 2>/dev/null || true)" == "${home_real}" ]] || die "Thư mục đang lưu thuộc home khác; nhập đúng home dự án đã cài."
+    EDGE_NETWORK="${EDGE_NETWORK:-$(read_config_value EDGE_NETWORK)}"
+    APP_NETWORK="${APP_NETWORK:-$(read_config_value APP_NETWORK)}"
+    EDGE_SUBNET="${EDGE_SUBNET:-$(read_config_value EDGE_SUBNET)}"
+    APP_SUBNET="${APP_SUBNET:-$(read_config_value APP_SUBNET)}"
+  else
+    PROJECT_SLUG="${PROJECT_SLUG:-${default_slug}}"
+    PROJECT_NAME="${PROJECT_NAME:-${PROJECT_SLUG}}"
+  fi
+  default_name="${PROJECT_NAME:-${PROJECT_SLUG}}"
+  read -r -p "Tên hiển thị dự án [${default_name}]: " entered_name
+  PROJECT_NAME="${entered_name:-${default_name}}"
+  read -r -p "Mã dự án dùng cho Docker [${PROJECT_SLUG}]: " entered_slug
+  PROJECT_SLUG="${entered_slug:-${PROJECT_SLUG}}"
+  [[ -n "${PROJECT_NAME}" && "${PROJECT_NAME}" != *$'\n'* && "${PROJECT_NAME}" != *$'\r'* ]] || die "Tên hiển thị dự án không được để trống hoặc chứa xuống dòng."
+  [[ "${PROJECT_SLUG}" =~ ^[a-z0-9][a-z0-9_-]{0,47}$ ]] || die "Mã dự án chỉ được gồm chữ thường, số, gạch ngang/gạch dưới; tối đa 48 ký tự."
+  if [[ -e "${STACK_DIR}" ]]; then
+    [[ "$(cat "${STACK_DIR}/.project-managed")" == "${PROJECT_SLUG}" ]] || die "Mã dự án khác cấu hình hiện có; hãy đổi trong manage.sh."
+  fi
   DATA_DIR="${STACK_DIR}/data"
   TOKEN_FILE="${STACK_DIR}/secrets/cloudflare-tunnel-token"
   EDGE_NETWORK="${EDGE_NETWORK:-infra_edge}"
   APP_NETWORK="${APP_NETWORK:-infra_apps}"
   EDGE_SUBNET="${EDGE_SUBNET:-10.1.1.0/24}"
   APP_SUBNET="${APP_SUBNET:-10.1.2.0/24}"
-  if [[ -e "${STACK_DIR}" ]]; then
-    [[ -f "${STACK_DIR}/.project-managed" ]] || die "Thư mục đích đã tồn tại và không có dấu quản lý của installer: ${STACK_DIR}"
-    [[ "$(cat "${STACK_DIR}/.project-managed")" == "${PROJECT_SLUG}" ]] || die "Mã dự án khác cấu hình hiện có; hãy đổi trong manage.sh."
-  fi
 }
 
 validate_paths() {
@@ -137,25 +171,30 @@ read_inputs() {
   printf '\nCấu hình Cloudflare Tunnel đang được quản lý qua Cloudflare Dashboard.\n'
   local saved_domain
   saved_domain="$(read_config_value DOMAIN)"
-  read -r -p "Domain gốc (ví dụ pn.id.vn) [${saved_domain:-bắt buộc}]: " DOMAIN
-  DOMAIN="${DOMAIN:-${saved_domain}}"
+  local default_domain="${saved_domain:-${DEFAULT_DOMAIN:-pn.id.vn}}"
+  read -r -p "Domain gốc (ví dụ pn.id.vn) [${default_domain}]: " DOMAIN
+  DOMAIN="${DOMAIN:-${default_domain}}"
   [[ "${DOMAIN}" =~ ^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$ ]] || die "Domain không hợp lệ. Chỉ nhập domain, không thêm https:// hoặc hostname con."
 
   mkdir -p "${STACK_DIR}/secrets"
   chmod 700 "${STACK_DIR}/secrets"
 
-  local replace_token="yes"
   if [[ -s "${TOKEN_FILE}" ]]; then
     read -r -p "Đã có Tunnel token. Giữ token đang lưu? [Y/n]: " answer
-    if [[ ! "${answer}" =~ ^([nN]|no|NO)$ ]]; then
-      replace_token="no"
+    if [[ "${answer}" =~ ^([nN]|no|NO)$ ]]; then
+      read -r -s -p "Token mới (Enter để giữ token cũ): " TUNNEL_TOKEN
+      printf '\n'
     fi
-  fi
-
-  if [[ "${replace_token}" == "yes" ]]; then
-    read -r -s -p "Nhập Cloudflare Tunnel token (ký tự sẽ không hiển thị): " TUNNEL_TOKEN
+    TUNNEL_ENABLED="yes"
+  else
+    read -r -s -p "Cloudflare Tunnel token (Enter để cấu hình sau): " TUNNEL_TOKEN
     printf '\n'
-    [[ -n "${TUNNEL_TOKEN}" ]] || die "Tunnel token không được để trống."
+    if [[ -n "${TUNNEL_TOKEN}" ]]; then
+      TUNNEL_ENABLED="yes"
+    else
+      TUNNEL_ENABLED="no"
+      printf 'Chưa cấu hình token; NPM và Portainer sẽ được cài, Tunnel để tắt.\n'
+    fi
   fi
 }
 
@@ -173,8 +212,11 @@ install_docker() {
     docker compose version >/dev/null 2>&1 || die "Docker đã có nhưng Docker Compose plugin chưa dùng được. Cài compose-plugin rồi chạy lại; script không tự thay thế Docker đang dùng."
     if ! command -v curl >/dev/null 2>&1; then
       log "Cài curl để kiểm tra phiên bản dự án trên GitHub khi start."
-      apt-get update
-      DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl
+      if apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl; then
+        :
+      else
+        log "Không cài được curl; cài đặt stack vẫn tiếp tục, nhưng kiểm tra GitHub sẽ bị bỏ qua cho tới khi cài curl."
+      fi
     fi
     systemctl enable --now docker
     log "Dùng Docker hiện có: $(docker --version)"
@@ -244,9 +286,16 @@ save_secret() {
     printf '%s' "${TUNNEL_TOKEN}" > "${TOKEN_FILE}"
     unset TUNNEL_TOKEN
   fi
-  [[ -s "${TOKEN_FILE}" ]] || die "Không có Cloudflare Tunnel token."
-  chown root:"${SECRET_GROUP}" "${TOKEN_FILE}"
-  chmod 0440 "${TOKEN_FILE}"
+  if [[ -s "${TOKEN_FILE}" ]]; then
+    chown root:"${SECRET_GROUP}" "${TOKEN_FILE}"
+    chmod 0440 "${TOKEN_FILE}"
+    TUNNEL_ENABLED="yes"
+  else
+    : > "${TOKEN_FILE}"
+    chown root:root "${TOKEN_FILE}"
+    chmod 0440 "${TOKEN_FILE}"
+    TUNNEL_ENABLED="no"
+  fi
 }
 
 read_config_value() {
@@ -282,6 +331,10 @@ load_project_config() {
   TOKEN_FILE="${STACK_DIR}/secrets/cloudflare-tunnel-token"
   EDGE_NETWORK="$(read_config_value EDGE_NETWORK)"
   APP_NETWORK="$(read_config_value APP_NETWORK)"
+  TUNNEL_ENABLED="$(read_config_value TUNNEL_ENABLED)"
+  if [[ -z "${TUNNEL_ENABLED}" ]]; then
+    if [[ -s "${TOKEN_FILE}" ]]; then TUNNEL_ENABLED=yes; else TUNNEL_ENABLED=no; fi
+  fi
 }
 
 update_domain() {
@@ -308,14 +361,21 @@ replace_tunnel_token() {
   chown root:"${SECRET_GROUP}" "${tmp}"
   chmod 0440 "${tmp}"
   mv -f "${tmp}" "${TOKEN_FILE}"
+  write_config_value TUNNEL_ENABLED yes
+  TUNNEL_ENABLED=yes
 
   log "Đã thay token. Khởi động lại riêng cloudflared để nạp secret mới."
   compose --profile tunnel up -d --force-recreate cloudflared
 }
 
 apply_saved_stack() {
-  compose --profile all config --quiet
-  compose --profile all up -d
+  if [[ "${TUNNEL_ENABLED}" == yes && -s "${TOKEN_FILE}" ]]; then
+    compose --profile all config --quiet
+    compose --profile all up -d
+  else
+    compose --profile npm --profile portainer config --quiet
+    compose --profile npm --profile portainer up -d
+  fi
 }
 
 write_project_helpers() {
@@ -331,9 +391,10 @@ SLUG="$(env_value PROJECT_SLUG)"
 REPO="$(env_value UPDATE_REPO)"
 BRANCH="$(env_value UPDATE_BRANCH)"
 LOCAL_COMMIT="$(env_value INSTALLED_COMMIT)"
+TUNNEL_ENABLED="$(env_value TUNNEL_ENABLED)"
 [[ "${SLUG}" =~ ^[a-z0-9][a-z0-9_-]{0,47}$ ]] || { echo "PROJECT_SLUG không hợp lệ" >&2; exit 1; }
 REPO="${REPO:-https://github.com/tungtk0021/ubuntu-deploy}"
-BRANCH="${BRANCH:-codex/ubuntu-debian-rework}"
+BRANCH="${BRANCH:-main}"
 API_REPO="${REPO#https://github.com/}"
 API_REPO="${API_REPO%.git}"
 API_REF="${BRANCH//\//%2F}"
@@ -354,19 +415,22 @@ if [[ -t 0 ]] && command -v curl >/dev/null 2>&1; then
       read -r -p 'Chọn: ' UPDATE_CHOICE
       case "${UPDATE_CHOICE}" in
         u|U)
-          command -v tar >/dev/null 2>&1 || { echo 'Thiếu tar, không thể tải gói cập nhật.' >&2; exit 1; }
-          TMP_DIR="$(mktemp -d)"
-          trap 'rm -rf -- "${TMP_DIR}"' EXIT
-          if ! curl -fsSL --connect-timeout 5 --max-time 120 "https://api.github.com/repos/${API_REPO}/tarball/${LATEST_COMMIT}" -o "${TMP_DIR}/source.tar.gz"; then
-            echo 'Không tải được mã nguồn cập nhật; giữ nguyên phiên bản hiện tại.' >&2
-          elif mkdir "${TMP_DIR}/source" && tar -xzf "${TMP_DIR}/source.tar.gz" --strip-components=1 -C "${TMP_DIR}/source"; then
-            if "${TMP_DIR}/source/update-project.sh" "${DIR}" "${LATEST_COMMIT}"; then
-              exit 0
-            else
-              echo 'Cập nhật thất bại; thử khởi động phiên bản hiện tại.' >&2
-            fi
+          if ! command -v tar >/dev/null 2>&1; then
+            echo 'Thiếu lệnh tar; cài bằng sudo apt-get install tar. Giữ nguyên phiên bản hiện tại.' >&2
           else
-            echo 'Không thể giải nén mã nguồn cập nhật; giữ nguyên phiên bản hiện tại.' >&2
+            TMP_DIR="$(mktemp -d)"
+            trap 'rm -rf -- "${TMP_DIR}"' EXIT
+            if ! curl -fsSL --connect-timeout 5 --max-time 120 "https://api.github.com/repos/${API_REPO}/tarball/${LATEST_COMMIT}" -o "${TMP_DIR}/source.tar.gz"; then
+              echo 'Không tải được mã nguồn cập nhật; giữ nguyên phiên bản hiện tại.' >&2
+            elif mkdir "${TMP_DIR}/source" && tar -xzf "${TMP_DIR}/source.tar.gz" --strip-components=1 -C "${TMP_DIR}/source"; then
+            if "${TMP_DIR}/source/update-project.sh" "${DIR}" "${LATEST_COMMIT}" "${BRANCH}"; then
+                exit 0
+              else
+                echo 'Cập nhật thất bại; thử khởi động phiên bản hiện tại.' >&2
+              fi
+            else
+              echo 'Không thể giải nén mã nguồn cập nhật; giữ nguyên phiên bản hiện tại.' >&2
+            fi
           fi
           ;;
         t|T)
@@ -393,7 +457,11 @@ elif [[ -t 0 ]]; then
   printf 'Không tìm thấy curl; bỏ qua kiểm tra GitHub và dùng phiên bản hiện tại.\n'
 fi
 
-docker compose --project-directory "${DIR}" -f "${DIR}/compose.yaml" -p "${SLUG}" --profile all up -d
+if [[ "${TUNNEL_ENABLED}" == yes && -s "${DIR}/secrets/cloudflare-tunnel-token" ]]; then
+  docker compose --project-directory "${DIR}" -f "${DIR}/compose.yaml" -p "${SLUG}" --profile all up -d
+else
+  docker compose --project-directory "${DIR}" -f "${DIR}/compose.yaml" -p "${SLUG}" --profile npm --profile portainer up -d
+fi
 EOF
   cat > "${STACK_DIR}/stop.sh" <<'EOF'
 #!/usr/bin/env bash
@@ -523,8 +591,8 @@ manage_main() {
     edge_network="$(read_config_value EDGE_NETWORK)"
     app_network="$(read_config_value APP_NETWORK)"
     printf '\n=== QUẢN LÝ DỰ ÁN: %s (%s) ===\n' "${PROJECT_NAME}" "${PROJECT_SLUG}"
-    printf 'Thư mục: %s | Domain: %s | Networks: %s, %s\n' "${STACK_DIR}" "${domain:-chưa đặt}" "${edge_network:-infra_edge}" "${app_network:-infra_apps}"
-    printf '1) Sửa domain gốc\n2) Thay Cloudflare Tunnel token\n3) Áp dụng Compose và khởi động toàn bộ\n4) Đổi tên/mã/vị trí dự án\n5) Khôi phục dữ liệu từ dự án cũ\n6) Xóa trắng toàn bộ dự án\n0) Thoát\n'
+    printf 'Thư mục: %s | Domain: %s | Networks: %s, %s | Tunnel: %s\n' "${STACK_DIR}" "${domain:-chưa đặt}" "${edge_network:-infra_edge}" "${app_network:-infra_apps}" "${TUNNEL_ENABLED:-no}"
+    printf '1) Sửa domain gốc\n2) Thay Cloudflare Tunnel token\n3) Áp dụng Compose (bật Tunnel nếu đã có token)\n4) Đổi tên/mã/vị trí dự án\n5) Khôi phục dữ liệu từ dự án cũ\n6) Xóa trắng toàn bộ dự án\n0) Thoát\n'
     read -r -p 'Chọn tác vụ: ' choice
     case "${choice}" in
       1) update_domain ;;
@@ -551,6 +619,7 @@ PROJECT_HOME=${PROJECT_HOME}
 PROJECT_RELATIVE_DIR=${PROJECT_RELATIVE_DIR}
 DOMAIN=${DOMAIN}
 DATA_DIR=${DATA_DIR}
+TUNNEL_ENABLED=${TUNNEL_ENABLED}
 UPDATE_REPO=${UPDATE_REPO}
 UPDATE_BRANCH=${UPDATE_BRANCH}
 INSTALLED_COMMIT=${INSTALLED_COMMIT}
@@ -571,11 +640,17 @@ EOF
 
 deploy_stack() {
   log "Kiểm tra Compose configuration."
-  compose config --quiet
-
-  log "Tải image và khởi chạy dịch vụ."
-  compose --profile all pull
-  compose --profile all up -d
+  if [[ "${TUNNEL_ENABLED}" == yes && -s "${TOKEN_FILE}" ]]; then
+    compose --profile all config --quiet
+    log "Tải image và khởi chạy dịch vụ."
+    compose --profile all pull
+    compose --profile all up -d
+  else
+    compose --profile npm --profile portainer config --quiet
+    log "Tải image và khởi chạy NPM, Portainer (Tunnel chưa cấu hình)."
+    compose --profile npm --profile portainer pull
+    compose --profile npm --profile portainer up -d
+  fi
 }
 
 print_summary() {
@@ -599,6 +674,12 @@ Trong thư mục dự án có start.sh, stop.sh, manage.sh, compose.yaml, secret
 Chạy dự án: sudo ${STACK_DIR}/start.sh | Dừng toàn bộ: sudo ${STACK_DIR}/stop.sh
 Quản lý/đổi tên/khôi phục/xóa: sudo ${STACK_DIR}/manage.sh
 EOF
+  if [[ "${TUNNEL_ENABLED}" != yes ]]; then
+    cat <<'EOF'
+
+Cloudflare Tunnel hiện chưa bật vì chưa có token. Khi có token, chạy manage.sh và chọn “Thay Cloudflare Tunnel token”; các lần start sau sẽ tự chạy Tunnel.
+EOF
+  fi
 }
 
 deploy_main() {
