@@ -877,7 +877,7 @@ Portainer và NPM yêu cầu tạo tài khoản quản trị ở lần đăng nh
 Không có tài khoản/mật khẩu mặc định được tạo bởi script.
 Trong Cloudflare Tunnel, thêm Published application cho Portainer: portainer.${DOMAIN:-example.domain.com} -> http://portainer:9000
 Lấy Setup token ban đầu bằng lệnh sau, rồi nhập token vào trang Portainer để tạo admin (hoàn tất trong 5 phút):
-  sudo docker logs "\$(sudo docker ps --filter label=com.docker.compose.service=portainer --format '{{.Names}}' | head -n1)" 2>&1 | grep 'setup_token='
+  sudo docker logs "\$(sudo docker ps --filter label=com.docker.compose.service=portainer --format '{{.Names}}' | head -n1)" 2>&1 | grep -o 'setup_token=[^[:space:]]*' | tail -n1 | cut -d= -f2-
 
 Trong thư mục dự án có start.sh, stop.sh, manage.sh, compose.yaml, secrets/, data/ và backups/.
 File cấu hình dự án: ${STACK_DIR}/project-config.conf

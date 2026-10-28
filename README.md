@@ -171,10 +171,10 @@ Cloudflare có thể tạo Tunnel mới tại **Networking → Tunnels → Creat
 Ở lần cài mới, Portainer từ phiên bản 2.43 yêu cầu **Setup token** một lần để tạo tài khoản admin đầu tiên. Trên Ubuntu/Debian, chạy lệnh dưới đây trong terminal của máy chủ; lệnh tự tìm container Portainer của dự án và in ra dòng token:
 
 ```bash
-sudo docker logs "$(sudo docker ps --filter label=com.docker.compose.service=portainer --format '{{.Names}}' | head -n1)" 2>&1 | grep 'setup_token='
+sudo docker logs "$(sudo docker ps --filter label=com.docker.compose.service=portainer --format '{{.Names}}' | head -n1)" 2>&1 | grep -o 'setup_token=[^[:space:]]*' | tail -n1 | cut -d= -f2-
 ```
 
-Sao chép phần nằm sau `setup_token=` vào ô **Setup token** trong trình duyệt, rồi tạo tài khoản admin (mặc định username `admin`, mật khẩu tối thiểu 12 ký tự). Token chỉ dùng một lần; không gửi token cho người khác hoặc lưu vào repo. Hoàn tất trong vòng 5 phút kể từ lúc Portainer khởi động; nếu hết thời gian, khởi động lại dịch vụ để tạo token mới:
+Lệnh trên chỉ in giá trị token, không kèm tiền tố `setup_token=`; dán nguyên giá trị đó vào ô **Setup token** trong trình duyệt, rồi tạo tài khoản admin (mặc định username `admin`, mật khẩu tối thiểu 12 ký tự). Token chỉ dùng một lần; không gửi token cho người khác hoặc lưu vào repo. Hoàn tất trong vòng 5 phút kể từ lúc Portainer khởi động; nếu hết thời gian, khởi động lại dịch vụ để tạo token mới:
 
 ```bash
 sudo docker compose -p <PROJECT_SLUG> -f <PROJECT_DIR>/compose.yaml --profile portainer restart portainer
