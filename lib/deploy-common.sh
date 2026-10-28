@@ -205,14 +205,102 @@ save_secret() {
   chmod 0440 "${TOKEN_FILE}"
 }
 
+read_config_value() {
+  local key="$1" file="${STACK_DIR}/.env"
+  [[ -f "${file}" ]] || return 0
+  awk -F= -v key="${key}" '$1 == key { sub(/^[^=]*=/, ""); print; exit }' "${file}"
+}
+
+write_config_value() {
+  local key="$1" value="$2" file="${STACK_DIR}/.env" tmp
+  tmp="$(mktemp "${file}.tmp.XXXXXX")"
+  awk -v key="${key}" -v value="${value}" '
+    BEGIN { prefix = key "=" }
+    index($0, prefix) == 1 { print prefix value; found = 1; next }
+    { print }
+    END { if (!found) print prefix value }
+  ' "${file}" > "${tmp}"
+  chown root:root "${tmp}"
+  chmod 0600 "${tmp}"
+  mv -f "${tmp}" "${file}"
+}
+
+update_domain() {
+  local domain
+  read -r -p "Domain gốc mới: " domain
+  [[ "${domain}" =~ ^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$ ]] || die "Domain không hợp lệ. Chỉ nhập domain, không thêm https:// hoặc hostname con."
+  write_config_value DOMAIN "${domain}"
+  printf '\nĐã lưu domain %s. Cần cập nhật Public Hostname thủ công trong Cloudflare Zero Trust:\n' "${domain}"
+  printf '  proxy.%s -> HTTP -> npm:81\n' "${domain}"
+  printf '  %s -> HTTP -> npm:80\n' "${domain}"
+  printf '  docker.%s -> HTTP -> npm:80 (sau đó cập nhật Proxy Host trong NPM)\n' "${domain}"
+}
+
+replace_tunnel_token() {
+  local token tmp
+  read -r -s -p "Nhập Cloudflare Tunnel token mới (ký tự sẽ không hiển thị): " token
+  printf '\n'
+  [[ -n "${token}" ]] || die "Tunnel token không được để trống."
+  getent group "${SECRET_GROUP}" >/dev/null || die "Không tìm thấy group ${SECRET_GROUP}; hãy chạy lại installer để sửa cấu hình."
+  umask 0077
+  tmp="$(mktemp "${TOKEN_FILE}.tmp.XXXXXX")"
+  printf '%s' "${token}" > "${tmp}"
+  unset token
+  chown root:"${SECRET_GROUP}" "${tmp}"
+  chmod 0440 "${tmp}"
+  mv -f "${tmp}" "${TOKEN_FILE}"
+
+  log "Đã thay token. Khởi động lại riêng cloudflared để nạp secret mới."
+  docker compose --project-directory "${STACK_DIR}" -f "${STACK_DIR}/compose.yaml" \
+    --profile tunnel up -d --force-recreate cloudflared
+}
+
+apply_saved_stack() {
+  docker compose --project-directory "${STACK_DIR}" -f "${STACK_DIR}/compose.yaml" \
+    --profile all config --quiet
+  docker compose --project-directory "${STACK_DIR}" -f "${STACK_DIR}/compose.yaml" \
+    --profile all up -d
+}
+
+manage_main() {
+  require_root
+  [[ -f "${STACK_DIR}/compose.yaml" && -f "${STACK_DIR}/.env" ]] || die "Chưa tìm thấy cấu hình stack tại ${STACK_DIR}; hãy chạy installer trước."
+  [[ -t 0 ]] || die "Trình quản lý cần chạy trong terminal tương tác."
+  command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1 \
+    || die "Không tìm thấy Docker Compose plugin hoạt động."
+  set +x
+
+  local choice domain data_dir edge_network app_network
+  while true; do
+    domain="$(read_config_value DOMAIN)"
+    data_dir="$(read_config_value DATA_DIR)"
+    edge_network="$(read_config_value EDGE_NETWORK)"
+    app_network="$(read_config_value APP_NETWORK)"
+    printf '\n=== QUẢN LÝ CẤU HÌNH DEPLOY ===\n'
+    printf 'Domain: %s | Data: %s | Networks: %s, %s\n' "${domain:-chưa đặt}" "${data_dir:-chưa đặt}" "${edge_network:-infra_edge}" "${app_network:-infra_apps}"
+    printf '1) Sửa domain gốc\n2) Thay Cloudflare Tunnel token\n3) Áp dụng lại Compose và khởi động toàn bộ\n0) Thoát\n'
+    read -r -p 'Chọn tác vụ: ' choice
+    case "${choice}" in
+      1) update_domain ;;
+      2) replace_tunnel_token ;;
+      3) apply_saved_stack ;;
+      0) return 0 ;;
+      *) printf 'Lựa chọn không hợp lệ.\n' >&2 ;;
+    esac
+  done
+}
+
 write_compose_config() {
   install -d -o root -g root -m 0750 "${STACK_DIR}" "${STACK_DIR}/secrets"
   install -d -m 0750 "${DATA_DIR}/npm/data" "${DATA_DIR}/npm/letsencrypt" "${DATA_DIR}/portainer"
 
   cat > "${STACK_DIR}/.env" <<EOF
+DOMAIN=${DOMAIN}
 DATA_DIR=${DATA_DIR}
 EDGE_NETWORK=${EDGE_NETWORK}
 APP_NETWORK=${APP_NETWORK}
+EDGE_SUBNET=${EDGE_SUBNET}
+APP_SUBNET=${APP_SUBNET}
 CLOUDFLARED_SECRET_GID=${SECRET_GID}
 EOF
   chmod 0600 "${STACK_DIR}/.env"

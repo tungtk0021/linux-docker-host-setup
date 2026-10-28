@@ -17,7 +17,7 @@ Clone repo rồi chạy đúng script theo hệ điều hành:
 ```bash
 git clone https://github.com/tungtk0021/ubuntu-deploy.git
 cd ubuntu-deploy
-chmod +x deploy-ubuntu.sh deploy-debian.sh
+chmod +x deploy-ubuntu.sh deploy-debian.sh manage-config.sh
 
 sudo ./deploy-ubuntu.sh
 # hoặc
@@ -54,6 +54,22 @@ Thay `example.com` bằng domain bạn đã nhập. Không cần publish port tr
 NPM và Portainer yêu cầu tạo tài khoản quản trị khi đăng nhập lần đầu. Script không tạo thông tin mặc định. Portainer được cấp Docker socket để quản lý Docker; quyền này có thể tương đương quyền root trên host, nên chỉ quản trị viên đáng tin cậy được truy cập.
 
 Portainer CE là Community Edition. Portainer mô tả CE dành cho homelab/học tập và không dành cho hệ thống kinh doanh hoặc production có yêu cầu uptime, bảo mật hay toàn vẹn dữ liệu; hãy đánh giá giấy phép và hỗ trợ phù hợp trước khi dùng trong production. [Thông tin Portainer CE](https://github.com/portainer/portainer#intended-use)
+
+## Sửa cấu hình sau khi cài
+
+Nếu nhập sai domain hoặc cần đổi Tunnel token, chạy trình quản lý tương tác với quyền root:
+
+```bash
+sudo ./manage-config.sh
+```
+
+Menu cho phép:
+
+- Sửa domain gốc đã lưu trong `/opt/infra-stack/.env`; sau đó cập nhật Public Hostname tương ứng trong Cloudflare Dashboard.
+- Thay Tunnel token bằng cách nhập ẩn; script lưu token vào file secret và khởi động lại riêng `cloudflared`.
+- Áp dụng lại Compose và khởi động toàn bộ stack theo cấu hình đã lưu.
+
+Trình quản lý không hiển thị token. Thay đổi domain không tự cập nhật cấu hình Public Hostname trên Cloudflare, vì Tunnel đang được quản lý từ Dashboard.
 
 ## Bật/tắt dịch vụ bằng Compose profiles
 
