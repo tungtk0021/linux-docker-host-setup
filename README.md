@@ -6,8 +6,18 @@ Công cụ cài Docker Engine, Docker Compose plugin, Nginx Proxy Manager (NPM),
 
 ```bash
 sudo apt-get update && sudo apt-get install -y git
-git clone https://github.com/tungtk0021/ubuntu-deploy.git
-cd ubuntu-deploy
+REPO_DIR=linux-docker-host-setup
+if [ -d "$REPO_DIR/.git" ]; then
+  git -C "$REPO_DIR" fetch origin &&
+    git -C "$REPO_DIR" checkout main &&
+    git -C "$REPO_DIR" pull --ff-only origin main || exit 1
+elif [ -e "$REPO_DIR" ]; then
+  echo "${REPO_DIR} đã tồn tại nhưng không phải bản clone Git; hãy kiểm tra thư mục trước khi tiếp tục."
+  exit 1
+else
+  git clone https://github.com/tungtk0021/linux-docker-host-setup.git "$REPO_DIR" || exit 1
+fi
+cd "$REPO_DIR"
 chmod +x deploy-ubuntu.sh deploy-debian.sh manage-config.sh update-project.sh remove-legacy.sh
 sudo ./deploy-ubuntu.sh
 # hoặc
@@ -87,7 +97,7 @@ Không xóa `/srv/infra-data` cho tới khi đã xác nhận bản mới hoạt 
 Lấy phiên bản mới của repo bằng Git, rồi chạy updater với đường dẫn tuyệt đối của dự án hiện tại:
 
 ```bash
-cd ~/ubuntu-deploy
+cd ~/linux-docker-host-setup
 git fetch origin
 git checkout main
 git pull --ff-only origin main
