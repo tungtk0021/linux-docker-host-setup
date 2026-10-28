@@ -3,12 +3,17 @@
 set -Eeuo pipefail
 IFS=$'\n\t'
 
-readonly STACK_DIR="${STACK_DIR:-/opt/infra-stack}"
-readonly TOKEN_FILE="${STACK_DIR}/secrets/cloudflare-tunnel-token"
-readonly EDGE_NETWORK="${EDGE_NETWORK:-infra_edge}"
-readonly APP_NETWORK="${APP_NETWORK:-infra_apps}"
-readonly EDGE_SUBNET="${EDGE_SUBNET:-10.1.1.0/24}"
-readonly APP_SUBNET="${APP_SUBNET:-10.1.2.0/24}"
+STACK_DIR="${STACK_DIR:-}"
+TOKEN_FILE="${TOKEN_FILE:-}"
+PROJECT_HOME="${PROJECT_HOME:-}"
+PROJECT_RELATIVE_DIR="${PROJECT_RELATIVE_DIR:-}"
+PROJECT_NAME="${PROJECT_NAME:-}"
+PROJECT_SLUG="${PROJECT_SLUG:-}"
+DATA_DIR="${DATA_DIR:-}"
+EDGE_NETWORK="${EDGE_NETWORK:-}"
+APP_NETWORK="${APP_NETWORK:-}"
+EDGE_SUBNET="${EDGE_SUBNET:-}"
+APP_SUBNET="${APP_SUBNET:-}"
 readonly SECRET_GROUP="cloudflared-secret"
 
 log() { printf '\n[%s] %s\n' "$(date '+%H:%M:%S')" "$*"; }
@@ -23,8 +28,7 @@ Cách dùng:
   sudo ./deploy-debian.sh
 
 Tùy chọn qua biến môi trường:
-  STACK_DIR       Thư mục cấu hình (mặc định /opt/infra-stack)
-  DATA_DIR        Thư mục dữ liệu bền vững (mặc định /srv/infra-data)
+  PROJECT_HOME    Home chứa dự án (mặc định home của người gọi sudo)
   EDGE_SUBNET     Docker network cho Tunnel/NPM/Portainer (10.1.1.0/24)
   APP_SUBNET      Docker network cho ứng dụng (10.1.2.0/24)
 
@@ -72,24 +76,53 @@ check_os() {
   [[ -n "${CODENAME}" ]] || die "Không xác định được codename của hệ điều hành."
 }
 
+choose_project_location() {
+  [[ -t 0 ]] || die "Cần chạy tương tác để chọn tên và vị trí thư mục dự án."
+  local caller="${SUDO_USER:-root}" caller_home default_slug default_name
+  caller_home="$(getent passwd "${caller}" | cut -d: -f6)"
+  caller_home="${caller_home:-/root}"
+  PROJECT_HOME="${PROJECT_HOME:-${caller_home}}"
+  [[ "${PROJECT_HOME}" == /* && -d "${PROJECT_HOME}" && ! -L "${PROJECT_HOME}" ]] || die "PROJECT_HOME phải là thư mục home tuyệt đối đã tồn tại và không phải symlink."
+  default_slug="$(basename "${SCRIPT_DIR:-ubuntu-deploy}" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9_-]/-/g; s/^[^a-z0-9]*//; s/[^a-z0-9]*$//')"
+  default_slug="${default_slug:-docker-infra}"
+  default_name="${PROJECT_NAME:-${default_slug}}"
+  read -r -p "Tên hiển thị dự án [${default_name}]: " PROJECT_NAME
+  PROJECT_NAME="${PROJECT_NAME:-${default_name}}"
+  [[ -n "${PROJECT_NAME}" && "${PROJECT_NAME}" != *$'\n'* && "${PROJECT_NAME}" != *$'\r'* ]] || die "Tên hiển thị dự án không được để trống hoặc chứa xuống dòng."
+  read -r -p "Mã dự án dùng cho Docker [${default_slug}]: " PROJECT_SLUG
+  PROJECT_SLUG="${PROJECT_SLUG:-${default_slug}}"
+  [[ "${PROJECT_SLUG}" =~ ^[a-z0-9][a-z0-9_-]{0,47}$ ]] || die "Mã dự án chỉ được gồm chữ thường, số, gạch ngang/gạch dưới; tối đa 48 ký tự."
+  read -r -p "Home dự án [${PROJECT_HOME}]: " entered_home
+  PROJECT_HOME="${entered_home:-${PROJECT_HOME}}"
+  [[ "${PROJECT_HOME}" == /* && -d "${PROJECT_HOME}" && ! -L "${PROJECT_HOME}" ]] || die "Home dự án phải là thư mục tuyệt đối đã tồn tại và không phải symlink."
+  read -r -p "Đường dẫn thư mục dự án bên trong home [${PROJECT_SLUG}]: " PROJECT_RELATIVE_DIR
+  PROJECT_RELATIVE_DIR="${PROJECT_RELATIVE_DIR:-${PROJECT_SLUG}}"
+  [[ "${PROJECT_RELATIVE_DIR}" != /* && "${PROJECT_RELATIVE_DIR}" != *:* && "${PROJECT_RELATIVE_DIR}" != *[[:space:]]* ]] || die "Đường dẫn dự án phải tương đối, không có khoảng trắng hoặc dấu hai chấm."
+  local part
+  IFS=/ read -ra parts <<< "${PROJECT_RELATIVE_DIR}"
+  for part in "${parts[@]}"; do [[ -n "${part}" && "${part}" != . && "${part}" != .. ]] || die "Đường dẫn dự án không được chứa thành phần rỗng, . hoặc .."; done
+  STACK_DIR="${PROJECT_HOME}/${PROJECT_RELATIVE_DIR}"
+  local home_real resolved_target
+  home_real="$(realpath -e "${PROJECT_HOME}")"
+  resolved_target="$(realpath -m -- "${STACK_DIR}")"
+  [[ "${resolved_target}" == "${home_real}/"* ]] || die "Đường dẫn dự án phải nằm bên trong home đã chọn."
+  local walk="${home_real}"
+  for part in "${parts[@]}"; do walk="${walk}/${part}"; [[ ! -L "${walk}" ]] || die "Đường dẫn dự án không được đi qua symlink: ${walk}"; done
+  DATA_DIR="${STACK_DIR}/data"
+  TOKEN_FILE="${STACK_DIR}/secrets/cloudflare-tunnel-token"
+  EDGE_NETWORK="${EDGE_NETWORK:-infra_edge}"
+  APP_NETWORK="${APP_NETWORK:-infra_apps}"
+  EDGE_SUBNET="${EDGE_SUBNET:-10.1.1.0/24}"
+  APP_SUBNET="${APP_SUBNET:-10.1.2.0/24}"
+  if [[ -e "${STACK_DIR}" ]]; then
+    [[ -f "${STACK_DIR}/.project-managed" ]] || die "Thư mục đích đã tồn tại và không có dấu quản lý của installer: ${STACK_DIR}"
+    [[ "$(cat "${STACK_DIR}/.project-managed")" == "${PROJECT_SLUG}" ]] || die "Mã dự án khác cấu hình hiện có; hãy đổi trong manage.sh."
+  fi
+}
+
 validate_paths() {
-  [[ "${STACK_DIR}" == /* && "${STACK_DIR}" != *[[:space:]:]* ]] || die "STACK_DIR phải là đường dẫn tuyệt đối, không chứa khoảng trắng hoặc dấu hai chấm."
-
-  local default_data_dir="${DATA_DIR:-}"
-  if [[ -z "${default_data_dir}" && -f "${STACK_DIR}/.env" ]]; then
-    default_data_dir="$(sed -n 's/^DATA_DIR=//p' "${STACK_DIR}/.env" | head -n 1)"
-  fi
-  default_data_dir="${default_data_dir:-/srv/infra-data}"
-
-  if [[ -t 0 ]]; then
-    read -r -p "Thư mục lưu dữ liệu NPM/Portainer [${default_data_dir}]: " entered_data_dir
-    DATA_DIR="${entered_data_dir:-${default_data_dir}}"
-  else
-    DATA_DIR="${default_data_dir}"
-  fi
-
-  [[ "${DATA_DIR}" == /* && "${DATA_DIR}" != *[[:space:]:]* ]] || die "DATA_DIR phải là đường dẫn tuyệt đối, không chứa khoảng trắng hoặc dấu hai chấm."
-  export DATA_DIR
+  [[ "${STACK_DIR}" == /* && "${STACK_DIR}" != *[[:space:]:]* ]] || die "Đường dẫn dự án không hợp lệ."
+  export STACK_DIR DATA_DIR PROJECT_HOME PROJECT_RELATIVE_DIR PROJECT_NAME PROJECT_SLUG
 }
 
 read_inputs() {
@@ -99,7 +132,10 @@ read_inputs() {
   set +x
 
   printf '\nCấu hình Cloudflare Tunnel đang được quản lý qua Cloudflare Dashboard.\n'
-  read -r -p "Nhập domain gốc (ví dụ: pn.id.vn): " DOMAIN
+  local saved_domain
+  saved_domain="$(read_config_value DOMAIN)"
+  read -r -p "Domain gốc (ví dụ pn.id.vn) [${saved_domain:-bắt buộc}]: " DOMAIN
+  DOMAIN="${DOMAIN:-${saved_domain}}"
   [[ "${DOMAIN}" =~ ^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$ ]] || die "Domain không hợp lệ. Chỉ nhập domain, không thêm https:// hoặc hostname con."
 
   mkdir -p "${STACK_DIR}/secrets"
@@ -225,6 +261,21 @@ write_config_value() {
   mv -f "${tmp}" "${file}"
 }
 
+compose() {
+  docker compose --project-directory "${STACK_DIR}" -f "${STACK_DIR}/compose.yaml" -p "${PROJECT_SLUG}" "$@"
+}
+
+load_project_config() {
+  PROJECT_HOME="$(read_config_value PROJECT_HOME)"
+  PROJECT_RELATIVE_DIR="$(read_config_value PROJECT_RELATIVE_DIR)"
+  PROJECT_NAME="$(read_config_value PROJECT_NAME)"
+  PROJECT_SLUG="$(read_config_value PROJECT_SLUG)"
+  DATA_DIR="$(read_config_value DATA_DIR)"
+  TOKEN_FILE="${STACK_DIR}/secrets/cloudflare-tunnel-token"
+  EDGE_NETWORK="$(read_config_value EDGE_NETWORK)"
+  APP_NETWORK="$(read_config_value APP_NETWORK)"
+}
+
 update_domain() {
   local domain
   read -r -p "Domain gốc mới: " domain
@@ -251,19 +302,139 @@ replace_tunnel_token() {
   mv -f "${tmp}" "${TOKEN_FILE}"
 
   log "Đã thay token. Khởi động lại riêng cloudflared để nạp secret mới."
-  docker compose --project-directory "${STACK_DIR}" -f "${STACK_DIR}/compose.yaml" \
-    --profile tunnel up -d --force-recreate cloudflared
+  compose --profile tunnel up -d --force-recreate cloudflared
 }
 
 apply_saved_stack() {
-  docker compose --project-directory "${STACK_DIR}" -f "${STACK_DIR}/compose.yaml" \
-    --profile all config --quiet
-  docker compose --project-directory "${STACK_DIR}" -f "${STACK_DIR}/compose.yaml" \
-    --profile all up -d
+  compose --profile all config --quiet
+  compose --profile all up -d
+}
+
+write_project_helpers() {
+  cat > "${STACK_DIR}/start.sh" <<'EOF'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+[[ ${EUID} -eq 0 ]] || { echo "Chạy bằng sudo: sudo $0" >&2; exit 1; }
+SLUG="$(sed -n 's/^PROJECT_SLUG=//p' "${DIR}/.env" | head -n1)"
+[[ "${SLUG}" =~ ^[a-z0-9][a-z0-9_-]{0,47}$ ]] || { echo "PROJECT_SLUG không hợp lệ" >&2; exit 1; }
+docker compose --project-directory "${DIR}" -f "${DIR}/compose.yaml" -p "${SLUG}" --profile all up -d
+EOF
+  cat > "${STACK_DIR}/stop.sh" <<'EOF'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+[[ ${EUID} -eq 0 ]] || { echo "Chạy bằng sudo: sudo $0" >&2; exit 1; }
+SLUG="$(sed -n 's/^PROJECT_SLUG=//p' "${DIR}/.env" | head -n1)"
+[[ "${SLUG}" =~ ^[a-z0-9][a-z0-9_-]{0,47}$ ]] || { echo "PROJECT_SLUG không hợp lệ" >&2; exit 1; }
+docker compose --project-directory "${DIR}" -f "${DIR}/compose.yaml" -p "${SLUG}" --profile all stop
+EOF
+  chmod 0750 "${STACK_DIR}/start.sh" "${STACK_DIR}/stop.sh"
+  cp "${SCRIPT_DIR}/manage-config.sh" "${STACK_DIR}/manage.sh"
+  chmod 0750 "${STACK_DIR}/manage.sh"
+  install -d -m 0750 "${STACK_DIR}/lib"
+  cp "${SCRIPT_DIR}/lib/deploy-common.sh" "${STACK_DIR}/lib/deploy-common.sh"
+  chmod 0640 "${STACK_DIR}/lib/deploy-common.sh"
+}
+
+project_dir_for_relative() {
+  local base="$1" relative="$2" part
+  [[ "${relative}" != /* && "${relative}" != *:* && "${relative}" != *[[:space:]]* ]] || return 1
+  IFS=/ read -ra pieces <<< "${relative}"
+  for part in "${pieces[@]}"; do [[ -n "${part}" && "${part}" != . && "${part}" != .. ]] || return 1; done
+  printf '%s/%s' "${base}" "${relative}"
+}
+
+rename_project() {
+  local new_name new_slug new_rel target old_dir old_slug home_real walk part
+  read -r -p "Tên hiển thị mới [${PROJECT_NAME}]: " new_name
+  new_name="${new_name:-${PROJECT_NAME}}"
+  read -r -p "Mã dự án Docker mới [${PROJECT_SLUG}]: " new_slug
+  new_slug="${new_slug:-${PROJECT_SLUG}}"
+  [[ "${new_slug}" =~ ^[a-z0-9][a-z0-9_-]{0,47}$ ]] || die "Mã dự án không hợp lệ."
+  [[ -n "${new_name}" && "${new_name}" != *$'\n'* && "${new_name}" != *$'\r'* ]] || die "Tên hiển thị không hợp lệ."
+  read -r -p "Đường dẫn mới bên trong ${PROJECT_HOME} [${PROJECT_RELATIVE_DIR}]: " new_rel
+  new_rel="${new_rel:-${PROJECT_RELATIVE_DIR}}"
+  target="$(project_dir_for_relative "${PROJECT_HOME}" "${new_rel}")" || die "Đường dẫn tương đối không hợp lệ."
+  old_dir="$(realpath -e "${STACK_DIR}")"
+  home_real="$(realpath -e "${PROJECT_HOME}")"
+  walk="${home_real}"
+  IFS=/ read -ra target_parts <<< "${new_rel}"
+  for part in "${target_parts[@]}"; do walk="${walk}/${part}"; [[ ! -L "${walk}" ]] || die "Đường dẫn đích không được đi qua symlink: ${walk}"; done
+  target="$(realpath -m -- "${target}")"
+  [[ "${old_dir}" == "${home_real}/"* && "${target}" == "${home_real}/"* && ! -L "${target}" ]] || die "Dự án phải nằm dưới home đã cấu hình và không đi qua symlink."
+  [[ "${target}" != "${old_dir}/"* ]] || die "Không thể chuyển dự án vào bên trong chính thư mục dự án."
+  [[ ! -e "${target}" || "${target}" == "${old_dir}" ]] || die "Đích đã tồn tại: ${target}"
+  printf '\nSẽ đổi dự án thành %s (%s), chuyển từ %s đến %s.\n' "${new_name}" "${new_slug}" "${old_dir}" "${target}"
+  read -r -p "Gõ MOVE ${PROJECT_SLUG} để xác nhận: " confirmation
+  [[ "${confirmation}" == "MOVE ${PROJECT_SLUG}" ]] || { printf 'Đã hủy.\n'; return; }
+  old_slug="${PROJECT_SLUG}"
+  compose --profile all down
+  install -d -m 0750 "$(dirname "${target}")"
+  mv -- "${old_dir}" "${target}"
+  STACK_DIR="${target}"
+  DATA_DIR="${STACK_DIR}/data"
+  PROJECT_RELATIVE_DIR="${new_rel}"
+  PROJECT_NAME="${new_name}"
+  PROJECT_SLUG="${new_slug}"
+  TOKEN_FILE="${STACK_DIR}/secrets/cloudflare-tunnel-token"
+  write_config_value PROJECT_NAME "${PROJECT_NAME}"
+  write_config_value PROJECT_SLUG "${PROJECT_SLUG}"
+  write_config_value PROJECT_RELATIVE_DIR "${PROJECT_RELATIVE_DIR}"
+  write_config_value DATA_DIR "${DATA_DIR}"
+  printf '%s' "${PROJECT_SLUG}" > "${STACK_DIR}/.project-managed"
+  log "Đã chuyển dự án. Stack cũ (${old_slug}) đã được dừng; dùng ${STACK_DIR}/start.sh để khởi động."
+  exit 0
+}
+
+restore_project_data() {
+  local source_dir backup_stamp backup_dir layout
+  read -r -p "Đường dẫn thư mục dữ liệu dự án cũ: " source_dir
+  [[ -d "${source_dir}" && ! -L "${source_dir}" ]] || die "Không tìm thấy thư mục nguồn hợp lệ."
+  source_dir="$(realpath -e "${source_dir}")"
+  [[ "${source_dir}" != "${STACK_DIR}" && "${source_dir}" != "${DATA_DIR}" && "${source_dir}" != "${STACK_DIR}/"* ]] || die "Nguồn không được nằm trong dự án đang chạy."
+  if [[ -d "${source_dir}/data/npm/data" ]]; then layout="${source_dir}/data"
+  elif [[ -d "${source_dir}/npm/data" ]]; then layout="${source_dir}"
+  elif [[ -d "${source_dir}/npm" && -d "${source_dir}/portainer" ]]; then layout="${source_dir}"
+  else die "Không nhận diện được dữ liệu cũ. Cần npm/data, npm/letsencrypt và portainer (hoặc data/npm/data...)."; fi
+  local portainer_source="${layout}/portainer"
+  [[ -d "${layout}/npm/data" && -d "${layout}/npm/letsencrypt" ]] || die "Thiếu thư mục NPM data hoặc letsencrypt."
+  [[ -d "${portainer_source}/data" ]] && portainer_source="${portainer_source}/data"
+  [[ -d "${portainer_source}" ]] || die "Thiếu thư mục dữ liệu Portainer."
+  printf '\nKhôi phục dữ liệu từ: %s\nDữ liệu hiện tại sẽ được giữ trong backups trước khi thay thế.\n' "${layout}"
+  read -r -p "Gõ RESTORE ${PROJECT_SLUG} để xác nhận: " confirmation
+  [[ "${confirmation}" == "RESTORE ${PROJECT_SLUG}" ]] || { printf 'Đã hủy.\n'; return; }
+  compose --profile all down
+  backup_stamp="$(date '+%Y%m%d-%H%M%S')"
+  backup_dir="$(mktemp -d "${STACK_DIR}/backups/pre-restore-${backup_stamp}-XXXXXX")"
+  chmod 0750 "${backup_dir}"
+  if [[ -d "${DATA_DIR}" ]]; then mv -- "${DATA_DIR}" "${backup_dir}/data"; fi
+  install -d -m 0750 "${DATA_DIR}/npm/data" "${DATA_DIR}/npm/letsencrypt" "${DATA_DIR}/portainer"
+  cp -a "${layout}/npm/data/." "${DATA_DIR}/npm/data/"
+  cp -a "${layout}/npm/letsencrypt/." "${DATA_DIR}/npm/letsencrypt/"
+  cp -a "${portainer_source}/." "${DATA_DIR}/portainer/"
+  log "Khôi phục xong. Dịch vụ vẫn đang dừng; kiểm tra cấu hình rồi chạy ${STACK_DIR}/start.sh. Token Cloudflare không được nhập từ nguồn cũ."
+}
+
+wipe_project() {
+  local real_dir home_real confirmation
+  real_dir="$(realpath -e "${STACK_DIR}")"
+  home_real="$(realpath -e "${PROJECT_HOME}")"
+  [[ "${real_dir}" == "${home_real}/"* && -f "${real_dir}/.project-managed" && "$(cat "${real_dir}/.project-managed")" == "${PROJECT_SLUG}" ]] || die "Kiểm tra an toàn thất bại; không xóa thư mục không được installer quản lý."
+  [[ "${real_dir}" != "${home_real}" && "${real_dir}" != / && ! -L "${STACK_DIR}" ]] || die "Từ chối xóa home, root hoặc symlink."
+  printf '\nSẼ XÓA VĨNH VIỄN toàn bộ dự án và dữ liệu, secrets, backups tại:\n  %s\n' "${real_dir}"
+  read -r -p "Gõ WIPE ${PROJECT_SLUG} để xác nhận: " confirmation
+  [[ "${confirmation}" == "WIPE ${PROJECT_SLUG}" ]] || { printf 'Đã hủy.\n'; return; }
+  compose --profile all down
+  cd "${PROJECT_HOME}"
+  rm -rf --one-file-system -- "${real_dir}"
+  log "Đã xóa dự án ${PROJECT_SLUG}."
+  exit 0
 }
 
 manage_main() {
   require_root
+  load_project_config
   [[ -f "${STACK_DIR}/compose.yaml" && -f "${STACK_DIR}/.env" ]] || die "Chưa tìm thấy cấu hình stack tại ${STACK_DIR}; hãy chạy installer trước."
   [[ -t 0 ]] || die "Trình quản lý cần chạy trong terminal tương tác."
   command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1 \
@@ -276,14 +447,17 @@ manage_main() {
     data_dir="$(read_config_value DATA_DIR)"
     edge_network="$(read_config_value EDGE_NETWORK)"
     app_network="$(read_config_value APP_NETWORK)"
-    printf '\n=== QUẢN LÝ CẤU HÌNH DEPLOY ===\n'
-    printf 'Domain: %s | Data: %s | Networks: %s, %s\n' "${domain:-chưa đặt}" "${data_dir:-chưa đặt}" "${edge_network:-infra_edge}" "${app_network:-infra_apps}"
-    printf '1) Sửa domain gốc\n2) Thay Cloudflare Tunnel token\n3) Áp dụng lại Compose và khởi động toàn bộ\n0) Thoát\n'
+    printf '\n=== QUẢN LÝ DỰ ÁN: %s (%s) ===\n' "${PROJECT_NAME}" "${PROJECT_SLUG}"
+    printf 'Thư mục: %s | Domain: %s | Networks: %s, %s\n' "${STACK_DIR}" "${domain:-chưa đặt}" "${edge_network:-infra_edge}" "${app_network:-infra_apps}"
+    printf '1) Sửa domain gốc\n2) Thay Cloudflare Tunnel token\n3) Áp dụng Compose và khởi động toàn bộ\n4) Đổi tên/mã/vị trí dự án\n5) Khôi phục dữ liệu từ dự án cũ\n6) Xóa trắng toàn bộ dự án\n0) Thoát\n'
     read -r -p 'Chọn tác vụ: ' choice
     case "${choice}" in
       1) update_domain ;;
       2) replace_tunnel_token ;;
       3) apply_saved_stack ;;
+      4) rename_project ;;
+      5) restore_project_data ;;
+      6) wipe_project ;;
       0) return 0 ;;
       *) printf 'Lựa chọn không hợp lệ.\n' >&2 ;;
     esac
@@ -292,9 +466,14 @@ manage_main() {
 
 write_compose_config() {
   install -d -o root -g root -m 0750 "${STACK_DIR}" "${STACK_DIR}/secrets"
+  install -d -m 0750 "${STACK_DIR}/backups"
   install -d -m 0750 "${DATA_DIR}/npm/data" "${DATA_DIR}/npm/letsencrypt" "${DATA_DIR}/portainer"
 
   cat > "${STACK_DIR}/.env" <<EOF
+PROJECT_NAME=${PROJECT_NAME}
+PROJECT_SLUG=${PROJECT_SLUG}
+PROJECT_HOME=${PROJECT_HOME}
+PROJECT_RELATIVE_DIR=${PROJECT_RELATIVE_DIR}
 DOMAIN=${DOMAIN}
 DATA_DIR=${DATA_DIR}
 EDGE_NETWORK=${EDGE_NETWORK}
@@ -307,23 +486,26 @@ EOF
 
   install -m 0640 "${SCRIPT_DIR}/compose.yaml" "${STACK_DIR}/compose.yaml"
   chown root:root "${STACK_DIR}/.env" "${STACK_DIR}/compose.yaml"
+  printf '%s' "${PROJECT_SLUG}" > "${STACK_DIR}/.project-managed"
+  chmod 0640 "${STACK_DIR}/.project-managed"
+  write_project_helpers
 }
 
 deploy_stack() {
   log "Kiểm tra Compose configuration."
-  docker compose --project-directory "${STACK_DIR}" -f "${STACK_DIR}/compose.yaml" config --quiet
+  compose config --quiet
 
   log "Tải image và khởi chạy dịch vụ."
-  docker compose --project-directory "${STACK_DIR}" -f "${STACK_DIR}/compose.yaml" pull
-  docker compose --project-directory "${STACK_DIR}" -f "${STACK_DIR}/compose.yaml" up -d
+  compose --profile all pull
+  compose --profile all up -d
 }
 
 print_summary() {
   cat <<EOF
 
-Cài đặt hoàn tất trên ${PRETTY_NAME:-${ID}}.
+Cài đặt dự án ${PROJECT_NAME} (${PROJECT_SLUG}) hoàn tất trên ${PRETTY_NAME:-${ID}}.
 
-Thư mục stack : ${STACK_DIR}
+Thư mục dự án : ${STACK_DIR}
 Thư mục dữ liệu: ${DATA_DIR}
 Docker network : ${EDGE_NETWORK} (${EDGE_SUBNET}), ${APP_NETWORK} (${APP_SUBNET})
 
@@ -335,9 +517,9 @@ Không có cổng dịch vụ nào được publish trực tiếp lên host.
 Portainer và NPM yêu cầu tạo tài khoản quản trị ở lần đăng nhập đầu tiên.
 Không có tài khoản/mật khẩu mặc định được tạo bởi script.
 
-Stack được lưu ở ${STACK_DIR}/compose.yaml. Khi cần cập nhật image, chỉnh tag đã ghim
-trong file compose rồi chạy: docker compose -f ${STACK_DIR}/compose.yaml pull
-và: docker compose -f ${STACK_DIR}/compose.yaml up -d
+Trong thư mục dự án có start.sh, stop.sh, manage.sh, compose.yaml, secrets/, data/ và backups/.
+Chạy dự án: sudo ${STACK_DIR}/start.sh | Dừng toàn bộ: sudo ${STACK_DIR}/stop.sh
+Quản lý/đổi tên/khôi phục/xóa: sudo ${STACK_DIR}/manage.sh
 EOF
 }
 
@@ -348,6 +530,7 @@ deploy_main() {
 
   require_root
   check_os "${expected}"
+  choose_project_location
   validate_paths
   check_network_overlap
   read_inputs

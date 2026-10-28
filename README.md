@@ -1,18 +1,8 @@
 # Ubuntu / Debian Docker host setup
 
-Script cài Docker Engine, Docker Compose plugin, Nginx Proxy Manager (NPM), Portainer CE và Cloudflare Tunnel trên máy chủ Ubuntu hoặc Debian.
+Công cụ cài Docker Engine, Docker Compose plugin, Nginx Proxy Manager (NPM), Portainer CE và Cloudflare Tunnel. Hỗ trợ Ubuntu Server 22.04/24.04/26.04 LTS, Debian 12/13 và kiến trúc `amd64`/`arm64`.
 
-## Hệ điều hành hỗ trợ
-
-- Ubuntu Server 22.04, 24.04 và 26.04 LTS.
-- Debian 12 (Bookworm) và Debian 13 (Trixie).
-- `amd64` và `arm64` cho các image dịch vụ được cấu hình trong Compose.
-
-Docker được cài từ kho APT chính thức của Docker. Nếu máy đã có Docker và Compose, script giữ nguyên cài đặt đó. Nếu phát hiện gói Docker/containerd có thể xung đột, script dừng để quản trị viên rà soát; script không tự gỡ các gói đang có.
-
-## Chạy cài đặt
-
-Clone repo rồi chạy đúng script theo hệ điều hành:
+## Cài đặt
 
 ```bash
 git clone https://github.com/tungtk0021/ubuntu-deploy.git
@@ -24,88 +14,56 @@ sudo ./deploy-ubuntu.sh
 sudo ./deploy-debian.sh
 ```
 
-Script hỏi domain gốc và Cloudflare Tunnel token. Token được nhập ẩn, lưu riêng trong `/opt/infra-stack/secrets/cloudflare-tunnel-token` với quyền hạn chế, rồi mount dưới dạng Compose secret. Token không nằm trong file Compose, `.env`, lịch sử lệnh hay log script. Khi chạy lại, có thể giữ token đã lưu hoặc thay bằng token mới.
+Installer sẽ hỏi tên hiển thị, mã Docker và vị trí thư mục dự án bên trong home. Mặc định home là tài khoản đã gọi `sudo` (hoặc `/root` nếu đăng nhập trực tiếp root). Mã dự án chỉ chấp nhận chữ thường, số, `_` và `-`. Tất cả cấu hình, token, dữ liệu, backup và lệnh quản lý được đặt trong thư mục dự án.
 
-Mặc định dữ liệu NPM và Portainer nằm ở `/srv/infra-data`. Nếu dùng ổ đĩa riêng, hãy mount ổ đó trước khi cài và nhập đường dẫn mount làm thư mục dữ liệu. Script không tự sửa `/etc/fstab` hoặc mount NAS.
+Sau đó nhập domain gốc và Cloudflare Tunnel token (token được nhập ẩn). Token lưu trong `secrets/cloudflare-tunnel-token` với quyền hạn chế, tách khỏi `.env` và Compose. Mạng Docker mặc định là `infra_edge` (`10.1.1.0/24`) và `infra_apps` (`10.1.2.0/24`); có thể chỉnh bằng `EDGE_NETWORK`, `APP_NETWORK`, `EDGE_SUBNET`, `APP_SUBNET` trước khi chạy.
 
-Có thể thay đổi thư mục và dải mạng trước khi chạy:
+Nếu dự định đặt dữ liệu trên volume/NAS, hãy mount volume đó trước và chọn thư mục dự án nằm trên volume được mount. Installer không tự chỉnh `/etc/fstab` hay mount NAS. Không có cổng dịch vụ nào được publish trực tiếp lên host; Cloudflare Tunnel kết nối qua Docker network.
 
-```bash
-sudo env DATA_DIR=/mnt/infra-data \
-  EDGE_SUBNET=10.1.1.0/24 APP_SUBNET=10.1.2.0/24 \
-  ./deploy-ubuntu.sh
-```
+## Các lệnh trong thư mục dự án
 
-`EDGE_SUBNET` và `APP_SUBNET` phải không trùng nhau, không trùng mạng LAN/VPN và không xung đột Docker network đã có. Script mặc định tạo `infra_edge` (`10.1.1.0/24`) và `infra_apps` (`10.1.2.0/24`). Ứng dụng sau này có thể tham gia `infra_apps`; NPM tham gia cả hai mạng để proxy vào ứng dụng.
+- `sudo ./start.sh` khởi động toàn bộ dịch vụ của dự án.
+- `sudo ./stop.sh` dừng toàn bộ dịch vụ, giữ container và dữ liệu.
+- `sudo ./manage.sh` mở menu quản trị dự án.
+- `compose.yaml`, `.env`, `secrets/`, `data/`, `backups/` nằm cạnh các lệnh trên.
 
-## Cloudflare Tunnel và hostname
+Các lệnh này chỉ dùng Compose project name đã lưu của dự án đó, nên không dừng stack Docker khác trên máy.
 
-Script chỉ tạo connector `cloudflared`; Tunnel và Public Hostname được quản lý trong Cloudflare Dashboard. Trong Zero Trust → Networks → Tunnels → chọn Tunnel → Public Hostnames, tạo:
+## Menu quản trị
+
+Menu `manage.sh` hỗ trợ:
+
+1. Sửa domain (cần cập nhật Public Hostname thủ công trong Cloudflare Dashboard).
+2. Thay token Cloudflare và tạo lại riêng connector Tunnel.
+3. Áp dụng cấu hình Compose và khởi động toàn bộ dịch vụ.
+4. Đổi tên hiển thị, mã Docker và/hoặc vị trí thư mục trong cùng home. Stack sẽ dừng và được chuyển; khởi động lại bằng `start.sh` tại vị trí mới.
+5. Khôi phục dữ liệu NPM, Let’s Encrypt và Portainer từ một thư mục dự án cũ. Hỗ trợ cấu trúc `npm/data`, `npm/letsencrypt`, `portainer` và `data/npm/data`, `data/npm/letsencrypt`, `data/portainer`. Dữ liệu hiện tại được giữ tại `backups/pre-restore-*`; stack để dừng sau khi khôi phục để quản trị viên kiểm tra rồi chủ động start. Token Tunnel và cấu hình Compose của nguồn cũ không được nhập.
+6. Xóa trắng dự án, bao gồm dữ liệu, token và backups. Yêu cầu gõ `WIPE <mã-dự-án>`; thao tác này không thể hoàn tác.
+
+Đổi tên và khôi phục cũng yêu cầu cụm xác nhận được menu hiển thị. Trình quản lý không hiển thị token.
+
+## Cloudflare hostname
+
+Trong Cloudflare Zero Trust → Networks → Tunnels → chọn Tunnel → Public Hostnames, thêm:
 
 | Hostname | Service |
 | --- | --- |
-| `proxy.example.com` | `HTTP` → `npm:81` (quản trị NPM) |
-| `example.com` | `HTTP` → `npm:80` (cổng vào proxy cho các site) |
+| `proxy.example.com` | `HTTP` → `npm:81` |
+| `example.com` | `HTTP` → `npm:80` |
 
-Thay `example.com` bằng domain bạn đã nhập. Không cần publish port trên host; Compose không có mục `ports:`. Tunnel kết nối đến các dịch vụ nội bộ trên Docker network.
+Thay `example.com` bằng domain đã nhập. Muốn quản trị Portainer qua `docker.example.com`, tạo thêm hostname đến `npm:80`, sau đó cấu hình Proxy Host trong NPM trỏ đến `https://portainer:9443` và bật Websockets Support. Trình duyệt dùng HTTPS công khai qua Cloudflare.
 
-Để quản trị Portainer qua `docker.example.com`, tạo thêm Public Hostname `docker.example.com` → `HTTP` → `npm:80`, rồi trong NPM thêm Proxy Host cho `docker.example.com` trỏ đến `https://portainer:9443`, bật Websockets Support. Tạo Proxy Host tương tự cho từng ứng dụng. Trình duyệt truy cập các hostname bằng HTTPS; TLS công khai được Cloudflare xử lý.
+NPM và Portainer yêu cầu tạo tài khoản quản trị ở lần đăng nhập đầu tiên. Portainer được cấp Docker socket, quyền này gần tương đương root trên host; chỉ cho quản trị viên tin cậy truy cập. Portainer CE hướng tới homelab/học tập; hãy đánh giá giấy phép và hỗ trợ phù hợp trước khi dùng production. [Portainer CE](https://github.com/portainer/portainer#intended-use)
 
-NPM và Portainer yêu cầu tạo tài khoản quản trị khi đăng nhập lần đầu. Script không tạo thông tin mặc định. Portainer được cấp Docker socket để quản lý Docker; quyền này có thể tương đương quyền root trên host, nên chỉ quản trị viên đáng tin cậy được truy cập.
+## Dịch vụ riêng lẻ và cập nhật
 
-Portainer CE là Community Edition. Portainer mô tả CE dành cho homelab/học tập và không dành cho hệ thống kinh doanh hoặc production có yêu cầu uptime, bảo mật hay toàn vẹn dữ liệu; hãy đánh giá giấy phép và hỗ trợ phù hợp trước khi dùng trong production. [Thông tin Portainer CE](https://github.com/portainer/portainer#intended-use)
-
-## Sửa cấu hình sau khi cài
-
-Nếu nhập sai domain hoặc cần đổi Tunnel token, chạy trình quản lý tương tác với quyền root:
+Mỗi dịch vụ có Compose profile riêng (`npm`, `portainer`, `tunnel`) và profile `all`. Dùng thư mục dự án thực tế thay cho `<PROJECT_DIR>`:
 
 ```bash
-sudo ./manage-config.sh
+sudo docker compose -p <PROJECT_SLUG> -f <PROJECT_DIR>/compose.yaml --profile npm up -d npm
+sudo docker compose -p <PROJECT_SLUG> -f <PROJECT_DIR>/compose.yaml --profile npm stop npm
+sudo docker compose -p <PROJECT_SLUG> -f <PROJECT_DIR>/compose.yaml --profile all pull
+sudo docker compose -p <PROJECT_SLUG> -f <PROJECT_DIR>/compose.yaml --profile all up -d
 ```
 
-Menu cho phép:
-
-- Sửa domain gốc đã lưu trong `/opt/infra-stack/.env`; sau đó cập nhật Public Hostname tương ứng trong Cloudflare Dashboard.
-- Thay Tunnel token bằng cách nhập ẩn; script lưu token vào file secret và khởi động lại riêng `cloudflared`.
-- Áp dụng lại Compose và khởi động toàn bộ stack theo cấu hình đã lưu.
-
-Trình quản lý không hiển thị token. Thay đổi domain không tự cập nhật cấu hình Public Hostname trên Cloudflare, vì Tunnel đang được quản lý từ Dashboard.
-
-## Bật/tắt dịch vụ bằng Compose profiles
-
-Mỗi dịch vụ có profile riêng và profile `all`. Dùng `up -d` để khởi động/tạo dịch vụ; dùng `stop` để dừng mà vẫn giữ container và dữ liệu:
-
-```bash
-sudo docker compose -f /opt/infra-stack/compose.yaml --profile npm up -d npm
-sudo docker compose -f /opt/infra-stack/compose.yaml --profile npm stop npm
-
-sudo docker compose -f /opt/infra-stack/compose.yaml --profile portainer up -d portainer
-sudo docker compose -f /opt/infra-stack/compose.yaml --profile portainer stop portainer
-
-sudo docker compose -f /opt/infra-stack/compose.yaml --profile tunnel up -d cloudflared
-sudo docker compose -f /opt/infra-stack/compose.yaml --profile tunnel stop cloudflared
-
-# Khởi động hoặc dừng cả ba dịch vụ
-sudo docker compose -f /opt/infra-stack/compose.yaml --profile all up -d
-sudo docker compose -f /opt/infra-stack/compose.yaml --profile all stop
-```
-
-Các profile độc lập: dừng NPM không dừng Portainer hoặc Tunnel. Tuy nhiên, khi dừng Tunnel thì các hostname công khai qua Cloudflare sẽ mất kết nối đến máy chủ.
-
-## Cấu hình và cập nhật
-
-- Compose file đang chạy: `/opt/infra-stack/compose.yaml`.
-- Biến cấu hình không bí mật: `/opt/infra-stack/.env`.
-- Cloudflare token: `/opt/infra-stack/secrets/cloudflare-tunnel-token`.
-- Dữ liệu bền vững: `/srv/infra-data` hoặc đường dẫn `DATA_DIR` đã chọn.
-
-Image tag được ghim trong `compose.yaml`, không dùng `latest`. Để cập nhật, rà soát tag mới và ghi chú migration/backup của từng dịch vụ, sau đó:
-
-```bash
-sudo docker compose -f /opt/infra-stack/compose.yaml pull
-sudo docker compose -f /opt/infra-stack/compose.yaml up -d
-```
-
-Trước khi nâng phiên bản NPM hoặc Portainer, sao lưu thư mục dữ liệu tương ứng. Sao lưu/NAS không được cấu hình tự động bởi repo này.
-
-Script không di chuyển dữ liệu từ các lần cài cũ trong `/home/MEGAT/docker`; hãy sao lưu và lập kế hoạch migration riêng trước khi chạy trên máy đang có stack cũ.
+Image tag được ghim trong `compose.yaml`, không dùng `latest`. Trước khi nâng NPM hoặc Portainer, sao lưu thư mục dữ liệu tương ứng. Sao lưu/NAS tự động chưa được cấu hình.
