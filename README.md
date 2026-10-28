@@ -22,12 +22,14 @@ Nếu dự định đặt dữ liệu trên volume/NAS, hãy mount volume đó t
 
 ## Các lệnh trong thư mục dự án
 
-- `sudo ./start.sh` khởi động toàn bộ dịch vụ của dự án.
+- `sudo ./start.sh` kiểm tra GitHub rồi khởi động toàn bộ dịch vụ của dự án.
 - `sudo ./stop.sh` dừng toàn bộ dịch vụ, giữ container và dữ liệu.
 - `sudo ./manage.sh` mở menu quản trị dự án.
 - `compose.yaml`, `.env`, `secrets/`, `data/`, `backups/` nằm cạnh các lệnh trên.
 
 Các lệnh này chỉ dùng Compose project name đã lưu của dự án đó, nên không dừng stack Docker khác trên máy.
+
+Khi có commit mới trên nhánh đã cài, `start.sh` cho chọn cập nhật ngay, hoãn 7 ngày, bỏ qua commit đó cho tới khi GitHub có commit mới, bỏ qua một lần hoặc thoát mà không start. Nếu bỏ qua trong 7 ngày thì các cập nhật mới khác cũng sẽ không được hỏi trong thời gian đó. Kiểm tra cần kết nối internet và `curl`; nếu GitHub không phản hồi, script tiếp tục khởi động phiên bản hiện tại. Chạy không có terminal tương tác cũng bỏ qua câu hỏi và start bình thường.
 
 ## Menu quản trị
 
@@ -49,7 +51,7 @@ Bản cài cũ chưa có dấu `.project-managed`; không dùng chức năng xó
 1. Chạy `sudo ./remove-legacy.sh`. Nhập thư mục Compose cũ và đúng Compose project name mà `docker compose ls --all` hiển thị. Xác nhận `STOP <tên>` để dừng/gỡ container cũ. Lệnh không gỡ Docker Engine, external networks hoặc dữ liệu bind mount; Compose có thể xóa network riêng do project quản lý.
 2. Cài bản mới bằng `deploy-ubuntu.sh` hoặc `deploy-debian.sh`, chọn thư mục dự án mới và nhập token Tunnel.
 3. Trong `sudo <thư-mục-dự-án>/manage.sh`, chọn khôi phục dữ liệu từ thư mục cũ, ví dụ `/srv/infra-data`. Dữ liệu hiện tại của dự án mới được giữ trong `backups/`; stack để dừng sau khi khôi phục.
-4. Chạy `<thư-mục-dự-án>/start.sh` và kiểm tra NPM, chứng chỉ, Portainer cùng hostname trước khi dọn bản cũ.
+4. Chạy `sudo <thư-mục-dự-án>/start.sh` và kiểm tra NPM, chứng chỉ, Portainer cùng hostname trước khi dọn bản cũ.
 5. Chạy `sudo ./remove-legacy.sh --remove-config-only /opt/infra-stack` nếu muốn xóa riêng thư mục cấu hình/token cũ sau khi bản mới đã được kiểm tra. Script kiểm tra không còn container mang project label đó, hỏi xác nhận lần nữa và không xóa `DATA_DIR`. Nếu không thể xác định `DATA_DIR`, script từ chối xóa cấu hình.
 
 Không xóa `/srv/infra-data` cho tới khi đã xác nhận bản mới hoạt động và có bản sao lưu độc lập. Giữ lại Docker networks nếu dự án mới dùng cùng tên/subnet; script gỡ bản cũ không xóa networks.
@@ -70,7 +72,7 @@ Nhánh có script updater hiện tại là `codex/ubuntu-debian-rework`. Nếu n
 
 Updater xác nhận dự án qua `.project-managed`, sao lưu Compose và công cụ quản trị cũ vào `backups/pre-update-*`, kiểm tra cấu hình, tải image và áp dụng Compose. `.env`, token và `data/` được giữ nguyên. Nếu kiểm tra cấu hình hoặc tải image thất bại, template trước cập nhật được phục hồi. Nếu `up` lỗi giữa lúc áp dụng, kiểm tra log và bản lưu trước khi thử lại.
 
-Updater chỉ cập nhật template có trong repo và image tag được khai báo tại `compose.yaml`; nó không tự thay đổi tag. Đọc release notes và ghi chú migration của dịch vụ trước khi nâng phiên bản có thay đổi schema.
+Updater chỉ cập nhật template có trong repo và image tag được khai báo tại `compose.yaml`; nó không tự thay đổi tag. Đọc release notes và ghi chú migration của dịch vụ trước khi nâng phiên bản có thay đổi schema. `start.sh` dùng cùng updater khi chọn cập nhật từ GitHub.
 
 ## Cloudflare hostname
 

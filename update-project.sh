@@ -6,7 +6,7 @@ die() { printf 'LỖI: %s\n' "$*" >&2; exit 1; }
 log() { printf '\n[%s] %s\n' "$(date '+%H:%M:%S')" "$*"; }
 
 [[ ${EUID} -eq 0 ]] || die "Hãy chạy bằng sudo: sudo $0 /duong/dan/du-an"
-[[ $# -eq 1 ]] || die "Cách dùng: sudo $0 /duong/dan/du-an"
+[[ $# -ge 1 && $# -le 2 ]] || die "Cách dùng: sudo $0 /duong/dan/du-an [commit-40-ky-tu]"
 command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1 || die "Cần Docker Compose plugin hoạt động."
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
@@ -22,6 +22,11 @@ read_env() {
 
 PROJECT_SLUG="$(read_env PROJECT_SLUG)"
 PROJECT_HOME="$(read_env PROJECT_HOME)"
+SOURCE_COMMIT="${2:-}"
+if [[ -z "${SOURCE_COMMIT}" ]] && command -v git >/dev/null 2>&1; then
+  SOURCE_COMMIT="$(git -c safe.directory="${SCRIPT_DIR}" -C "${SCRIPT_DIR}" rev-parse HEAD 2>/dev/null || true)"
+fi
+[[ -z "${SOURCE_COMMIT}" || "${SOURCE_COMMIT}" =~ ^[0-9a-f]{40}$ ]] || die "Commit nguồn phải là SHA-1 gồm 40 ký tự hex."
 [[ "${PROJECT_SLUG}" =~ ^[a-z0-9][a-z0-9_-]{0,47}$ ]] || die "PROJECT_SLUG trong .env không hợp lệ."
 [[ "$(cat "${PROJECT_DIR}/.project-managed")" == "${PROJECT_SLUG}" ]] || die "Dấu quản lý không khớp với PROJECT_SLUG."
 [[ "${PROJECT_HOME}" == /* && -d "${PROJECT_HOME}" ]] || die "PROJECT_HOME trong .env không hợp lệ."
@@ -52,11 +57,7 @@ source "${SCRIPT_DIR}/lib/deploy-common.sh"
 
 log "Đang cập nhật template cho ${PROJECT_SLUG}; dữ liệu, .env và Tunnel token được giữ nguyên."
 install -m 0640 "${SCRIPT_DIR}/compose.yaml" "${PROJECT_DIR}/compose.yaml"
-install -d -m 0750 "${PROJECT_DIR}/lib"
-cp "${SCRIPT_DIR}/manage-config.sh" "${PROJECT_DIR}/manage.sh"
-chmod 0750 "${PROJECT_DIR}/manage.sh"
-cp "${SCRIPT_DIR}/lib/deploy-common.sh" "${PROJECT_DIR}/lib/deploy-common.sh"
-chmod 0640 "${PROJECT_DIR}/lib/deploy-common.sh"
+write_project_helpers
 
 if ! docker compose --project-directory "${PROJECT_DIR}" -f "${PROJECT_DIR}/compose.yaml" \
   -p "${PROJECT_SLUG}" --profile all config --quiet; then
@@ -77,3 +78,9 @@ if ! docker compose --project-directory "${PROJECT_DIR}" -f "${PROJECT_DIR}/comp
 fi
 
 log "Cập nhật xong. Bản template trước cập nhật được giữ tại ${BACKUP_DIR}."
+if [[ -n "${SOURCE_COMMIT}" ]]; then
+  write_config_value INSTALLED_COMMIT "${SOURCE_COMMIT}"
+  log "Đã ghi nhận commit ${SOURCE_COMMIT:0:12} cho lần kiểm tra GitHub tiếp theo."
+else
+  log "Không đọc được SHA nguồn; lần start sau sẽ kiểm tra lại cập nhật."
+fi

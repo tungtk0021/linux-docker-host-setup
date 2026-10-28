@@ -14,6 +14,9 @@ EDGE_NETWORK="${EDGE_NETWORK:-}"
 APP_NETWORK="${APP_NETWORK:-}"
 EDGE_SUBNET="${EDGE_SUBNET:-}"
 APP_SUBNET="${APP_SUBNET:-}"
+UPDATE_REPO="${UPDATE_REPO:-https://github.com/tungtk0021/ubuntu-deploy}"
+UPDATE_BRANCH="${UPDATE_BRANCH:-codex/ubuntu-debian-rework}"
+INSTALLED_COMMIT="${INSTALLED_COMMIT:-}"
 readonly SECRET_GROUP="cloudflared-secret"
 
 log() { printf '\n[%s] %s\n' "$(date '+%H:%M:%S')" "$*"; }
@@ -168,6 +171,11 @@ installed_package() {
 install_docker() {
   if command -v docker >/dev/null 2>&1; then
     docker compose version >/dev/null 2>&1 || die "Docker đã có nhưng Docker Compose plugin chưa dùng được. Cài compose-plugin rồi chạy lại; script không tự thay thế Docker đang dùng."
+    if ! command -v curl >/dev/null 2>&1; then
+      log "Cài curl để kiểm tra phiên bản dự án trên GitHub khi start."
+      apt-get update
+      DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl
+    fi
     systemctl enable --now docker
     log "Dùng Docker hiện có: $(docker --version)"
     return
@@ -314,10 +322,77 @@ write_project_helpers() {
   cat > "${STACK_DIR}/start.sh" <<'EOF'
 #!/usr/bin/env bash
 set -Eeuo pipefail
+IFS=$'\n\t'
 DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 [[ ${EUID} -eq 0 ]] || { echo "Chạy bằng sudo: sudo $0" >&2; exit 1; }
-SLUG="$(sed -n 's/^PROJECT_SLUG=//p' "${DIR}/.env" | head -n1)"
+
+env_value() { awk -F= -v key="$1" '$1 == key { sub(/^[^=]*=/, ""); print; exit }' "${DIR}/.env"; }
+SLUG="$(env_value PROJECT_SLUG)"
+REPO="$(env_value UPDATE_REPO)"
+BRANCH="$(env_value UPDATE_BRANCH)"
+LOCAL_COMMIT="$(env_value INSTALLED_COMMIT)"
 [[ "${SLUG}" =~ ^[a-z0-9][a-z0-9_-]{0,47}$ ]] || { echo "PROJECT_SLUG không hợp lệ" >&2; exit 1; }
+REPO="${REPO:-https://github.com/tungtk0021/ubuntu-deploy}"
+BRANCH="${BRANCH:-codex/ubuntu-debian-rework}"
+API_REPO="${REPO#https://github.com/}"
+API_REPO="${API_REPO%.git}"
+API_REF="${BRANCH//\//%2F}"
+STATE_FILE="${DIR}/.update-state"
+
+if [[ -t 0 ]] && command -v curl >/dev/null 2>&1; then
+  printf 'Đang kiểm tra bản cập nhật trên GitHub... '
+  API_JSON="$(curl -fsSL --connect-timeout 3 --max-time 8 "https://api.github.com/repos/${API_REPO}/commits/${API_REF}" 2>/dev/null || true)"
+  LATEST_COMMIT="$(printf '%s\n' "${API_JSON}" | sed -n 's/^[[:space:]]*"sha": "\([0-9a-f]\{40\}\)",$/\1/p' | head -n1)"
+  if [[ "${LATEST_COMMIT}" =~ ^[0-9a-f]{40}$ && "${LATEST_COMMIT}" != "${LOCAL_COMMIT}" ]]; then
+    SKIP_UNTIL="$(awk -F= '$1 == "SKIP_UNTIL" {print $2; exit}' "${STATE_FILE}" 2>/dev/null || true)"
+    SKIP_COMMIT="$(awk -F= '$1 == "SKIP_COMMIT" {print $2; exit}' "${STATE_FILE}" 2>/dev/null || true)"
+    NOW="$(date +%s)"
+    if [[ "${SKIP_COMMIT}" != "${LATEST_COMMIT}" && ( ! "${SKIP_UNTIL}" =~ ^[0-9]+$ || ${SKIP_UNTIL} -le ${NOW} ) ]]; then
+      printf '\nCó commit mới: %s (đang cài: %s)\n' "${LATEST_COMMIT:0:12}" "${LOCAL_COMMIT:0:12}"
+      printf 'u) Cập nhật ngay   t) Nhắc lại sau 7 ngày   p) Bỏ qua commit này\n'
+      printf 's) Bỏ qua lần này   q) Thoát, không start\n'
+      read -r -p 'Chọn: ' UPDATE_CHOICE
+      case "${UPDATE_CHOICE}" in
+        u|U)
+          command -v tar >/dev/null 2>&1 || { echo 'Thiếu tar, không thể tải gói cập nhật.' >&2; exit 1; }
+          TMP_DIR="$(mktemp -d)"
+          trap 'rm -rf -- "${TMP_DIR}"' EXIT
+          if ! curl -fsSL --connect-timeout 5 --max-time 120 "https://api.github.com/repos/${API_REPO}/tarball/${LATEST_COMMIT}" -o "${TMP_DIR}/source.tar.gz"; then
+            echo 'Không tải được mã nguồn cập nhật; giữ nguyên phiên bản hiện tại.' >&2
+          elif mkdir "${TMP_DIR}/source" && tar -xzf "${TMP_DIR}/source.tar.gz" --strip-components=1 -C "${TMP_DIR}/source"; then
+            if "${TMP_DIR}/source/update-project.sh" "${DIR}" "${LATEST_COMMIT}"; then
+              exit 0
+            else
+              echo 'Cập nhật thất bại; thử khởi động phiên bản hiện tại.' >&2
+            fi
+          else
+            echo 'Không thể giải nén mã nguồn cập nhật; giữ nguyên phiên bản hiện tại.' >&2
+          fi
+          ;;
+        t|T)
+          printf 'SKIP_UNTIL=%s\n' "$((NOW + 604800))" > "${STATE_FILE}"
+          chmod 0600 "${STATE_FILE}"
+          ;;
+        p|P)
+          printf 'SKIP_COMMIT=%s\n' "${LATEST_COMMIT}" > "${STATE_FILE}"
+          chmod 0600 "${STATE_FILE}"
+          ;;
+        s|S) ;;
+        q|Q) exit 0 ;;
+        *) echo 'Lựa chọn không hợp lệ; tiếp tục start phiên bản hiện tại.' ;;
+      esac
+    else
+      printf 'đã có phiên bản mới nhưng đang trong thời gian bỏ qua.\n'
+    fi
+  elif [[ "${LATEST_COMMIT}" == "${LOCAL_COMMIT}" && -n "${LATEST_COMMIT}" ]]; then
+    printf 'đang dùng commit mới nhất (%s).\n' "${LATEST_COMMIT:0:12}"
+  else
+    printf 'không truy vấn được GitHub; tiếp tục dùng phiên bản hiện tại.\n'
+  fi
+elif [[ -t 0 ]]; then
+  printf 'Không tìm thấy curl; bỏ qua kiểm tra GitHub và dùng phiên bản hiện tại.\n'
+fi
+
 docker compose --project-directory "${DIR}" -f "${DIR}/compose.yaml" -p "${SLUG}" --profile all up -d
 EOF
   cat > "${STACK_DIR}/stop.sh" <<'EOF'
@@ -476,6 +551,9 @@ PROJECT_HOME=${PROJECT_HOME}
 PROJECT_RELATIVE_DIR=${PROJECT_RELATIVE_DIR}
 DOMAIN=${DOMAIN}
 DATA_DIR=${DATA_DIR}
+UPDATE_REPO=${UPDATE_REPO}
+UPDATE_BRANCH=${UPDATE_BRANCH}
+INSTALLED_COMMIT=${INSTALLED_COMMIT}
 EDGE_NETWORK=${EDGE_NETWORK}
 APP_NETWORK=${APP_NETWORK}
 EDGE_SUBNET=${EDGE_SUBNET}
@@ -530,6 +608,18 @@ deploy_main() {
 
   require_root
   check_os "${expected}"
+  if command -v git >/dev/null 2>&1 && git -c safe.directory="${SCRIPT_DIR}" -C "${SCRIPT_DIR}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    local source_branch source_commit source_remote
+    source_branch="$(git -c safe.directory="${SCRIPT_DIR}" -C "${SCRIPT_DIR}" branch --show-current)"
+    source_commit="$(git -c safe.directory="${SCRIPT_DIR}" -C "${SCRIPT_DIR}" rev-parse HEAD)"
+    source_remote="$(git -c safe.directory="${SCRIPT_DIR}" -C "${SCRIPT_DIR}" remote get-url origin 2>/dev/null || true)"
+    [[ -z "${source_branch}" ]] || UPDATE_BRANCH="${source_branch}"
+    [[ -z "${source_commit}" ]] || INSTALLED_COMMIT="${source_commit}"
+    case "${source_remote}" in
+      https://github.com/*) UPDATE_REPO="${source_remote%.git}" ;;
+      git@github.com:*) UPDATE_REPO="https://github.com/${source_remote#git@github.com:}"; UPDATE_REPO="${UPDATE_REPO%.git}" ;;
+    esac
+  fi
   choose_project_location
   validate_paths
   check_network_overlap
