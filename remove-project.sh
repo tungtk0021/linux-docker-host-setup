@@ -12,6 +12,20 @@ read_config() {
 [[ -t 0 ]] || die "Cần terminal tương tác để chọn thao tác remove."
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+source "${SCRIPT_DIR}/lib/docker-removal.sh"
+command -v docker >/dev/null 2>&1 || die "Cần Docker đang được cài đặt."
+list_running_containers
+printf '\n1) Tiếp tục gỡ một dự án đã đăng ký\n'
+printf '2) Gỡ toàn bộ container đang chạy trên máy (giữ volumes và dữ liệu)\n'
+printf '0) Thoát\n'
+read -r -p 'Chọn thao tác: ' top_choice
+case "${top_choice}" in
+  1) ;;
+  2) remove_all_running_containers; exit 0 ;;
+  0) printf 'Đã thoát.\n'; exit 0 ;;
+  *) die "Lựa chọn không hợp lệ." ;;
+esac
+
 GLOBAL_CONFIG="${SCRIPT_DIR}/global-config.conf"
 if [[ ! -f "${GLOBAL_CONFIG}" ]]; then
   printf 'Chưa có global-config.conf; chưa có dự án được đăng ký từ source này.\n'

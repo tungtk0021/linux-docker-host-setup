@@ -94,9 +94,9 @@ Thay `<PROJECT_DIR>` bằng đường dẫn thư mục cài đặt và `<PROJECT
 | `sudo ./start.sh` | Kiểm tra cập nhật GitHub rồi khởi động toàn bộ dự án. |
 | `sudo ./stop.sh` | Dừng toàn bộ dịch vụ, giữ dữ liệu và container. |
 | `sudo ./manage.sh` | Mở menu quản trị domain, Tunnel, cấu hình, đổi vị trí, khôi phục hoặc xóa trắng. |
-| `sudo ./remove-project.sh` | Chọn một dự án từ `global-config.conf`, rồi dừng và giữ dữ liệu, xóa toàn bộ sau xác nhận, hoặc mở `manage.sh`. |
+| `sudo ./remove-project.sh` | Liệt kê container đang chạy; chọn gỡ một dự án, gỡ toàn bộ container trên máy, hoặc thoát. Gỡ toàn máy cần gõ xác nhận và giữ volumes/dữ liệu. |
 | `sudo ./update-project.sh <PROJECT_DIR>` | Cập nhật template của dự án đã cài; giữ `.env`, token và dữ liệu. Có thể thêm `[commit] [branch]` để chỉ định nguồn cập nhật. |
-| `sudo ./remove-legacy.sh` | Dừng stack của bản cài cũ chưa có `.project-managed`. |
+| `sudo ./remove-legacy.sh` | Liệt kê container đang chạy; chọn dừng/gỡ riêng stack cũ, gỡ toàn bộ container trên máy, hoặc thoát. |
 | `sudo ./remove-legacy.sh --remove-config-only /opt/infra-stack` | Xóa riêng cấu hình bản cũ đã dừng; dữ liệu bind mount được giữ lại. |
 | `sudo docker compose -p <PROJECT_SLUG> -f <PROJECT_DIR>/compose.yaml --profile npm up -d npm` | Khởi động riêng NPM. |
 | `sudo docker compose -p <PROJECT_SLUG> -f <PROJECT_DIR>/compose.yaml --profile npm stop npm` | Dừng riêng NPM. |
@@ -105,7 +105,7 @@ Thay `<PROJECT_DIR>` bằng đường dẫn thư mục cài đặt và `<PROJECT
 
 ## Gỡ dự án theo global config
 
-Chạy `sudo ./remove-project.sh` từ gốc source repo. Script liệt kê các dự án trong `global-config.conf`, đọc file `project-config.conf` tương ứng và đưa ra ba lựa chọn: dừng/gỡ container nhưng giữ cấu hình và dữ liệu; xóa toàn bộ dự án sau khi gõ xác nhận; hoặc mở `manage.sh`. Nếu global config chưa có dự án nào, script báo chưa có dự án được đăng ký. Bản cài cũ vẫn dùng `remove-legacy.sh`.
+Chạy `sudo ./remove-project.sh` từ gốc source repo. Script liệt kê các container đang chạy trước, rồi cho chọn tiếp tục gỡ một dự án, dừng/xóa tất cả container trên máy, hoặc thoát. Lựa chọn gỡ toàn máy yêu cầu gõ `REMOVE ALL CONTAINERS`; chỉ container đang chạy tại thời điểm liệt kê bị xóa, volumes, image và dữ liệu bind mount vẫn được giữ. Khi tiếp tục gỡ riêng, script liệt kê dự án từ `global-config.conf`, đọc file `project-config.conf` tương ứng và cho chọn dừng/gỡ container nhưng giữ cấu hình/dữ liệu; xóa toàn bộ dự án sau khi gõ xác nhận; hoặc mở `manage.sh`. Bản cài cũ dùng `remove-legacy.sh`, có cùng lựa chọn gỡ toàn máy.
 
 Khi có commit mới trên nhánh GitHub của dự án, `start.sh` cho chọn cập nhật ngay, hoãn 7 ngày, bỏ qua commit đó cho tới khi có commit mới, bỏ qua một lần hoặc thoát mà không start. Nếu bỏ qua trong 7 ngày thì các cập nhật mới khác cũng sẽ không được hỏi trong thời gian đó. Kiểm tra cần kết nối internet và `curl`; nếu GitHub không phản hồi, script tiếp tục khởi động phiên bản hiện tại. Chạy không có terminal tương tác cũng bỏ qua câu hỏi và start bình thường.
 
@@ -126,7 +126,7 @@ Menu `manage.sh` hỗ trợ:
 
 Bản cài cũ chưa có dấu `.project-managed`; không dùng chức năng xóa trắng trong `manage.sh` cho bản cũ. Trước khi chuyển, sao lưu cả thư mục cấu hình cũ (thường là `/opt/infra-stack`) và thư mục dữ liệu (thường là `/srv/infra-data`). Sau đó:
 
-1. Chạy `sudo ./remove-legacy.sh`. Nhập thư mục Compose cũ và đúng Compose project name mà `docker compose ls --all` hiển thị. Xác nhận `STOP <tên>` để dừng/gỡ container cũ. Lệnh không gỡ Docker Engine, external networks hoặc dữ liệu bind mount; Compose có thể xóa network riêng do project quản lý.
+1. Chạy `sudo ./remove-legacy.sh`. Script liệt kê container đang chạy; chọn gỡ stack cũ hoặc gỡ tất cả container trên máy. Khi chọn stack cũ, nhập thư mục Compose và đúng Compose project name mà `docker compose ls --all` hiển thị. Hỗ trợ `compose.yaml`, `compose.yml`, `docker-compose.yaml` và `docker-compose.yml`. Xác nhận `STOP <tên>` để dừng/gỡ riêng stack. Lệnh không gỡ Docker Engine, external networks hoặc dữ liệu bind mount; Compose có thể xóa network riêng do project quản lý.
 2. Cài bản mới bằng `deploy-ubuntu.sh` hoặc `deploy-debian.sh`, chọn thư mục dự án mới và nhập token Tunnel.
 3. Trong `sudo <thư-mục-dự-án>/manage.sh`, chọn khôi phục dữ liệu từ thư mục cũ, ví dụ `/srv/infra-data`. Dữ liệu hiện tại của dự án mới được giữ trong `backups/`; stack để dừng sau khi khôi phục.
 4. Chạy `sudo <thư-mục-dự-án>/start.sh` và kiểm tra NPM, chứng chỉ, Portainer cùng hostname trước khi dọn bản cũ.

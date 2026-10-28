@@ -9,12 +9,26 @@ log() { printf '\n[%s] %s\n' "$(date '+%H:%M:%S')" "$*"; }
 [[ -t 0 ]] || die "Cần terminal tương tác để xác nhận thao tác."
 command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1 || die "Cần Docker Compose plugin hoạt động."
 
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+source "${SCRIPT_DIR}/lib/docker-removal.sh"
+list_running_containers
+
 REMOVE_ONLY=0
 if [[ "${1:-}" == "--remove-config-only" ]]; then
   [[ $# -eq 2 ]] || die "Cách dùng: sudo $0 --remove-config-only /duong/dan/compose-cu"
   REMOVE_ONLY=1
   PROJECT_DIR="$2"
 elif [[ $# -eq 0 ]]; then
+  printf '\n1) Tiếp tục gỡ riêng một stack Compose cũ\n'
+  printf '2) Gỡ toàn bộ container đang chạy trên máy (giữ volumes và dữ liệu)\n'
+  printf '0) Thoát\n'
+  read -r -p 'Chọn thao tác: ' TOP_CHOICE
+  case "${TOP_CHOICE}" in
+    1) ;;
+    2) remove_all_running_containers; exit 0 ;;
+    0) printf 'Đã thoát.\n'; exit 0 ;;
+    *) die "Lựa chọn không hợp lệ." ;;
+  esac
   read -r -p "Thư mục Compose cũ [/opt/infra-stack]: " PROJECT_DIR
   PROJECT_DIR="${PROJECT_DIR:-/opt/infra-stack}"
 else
@@ -22,11 +36,20 @@ else
 fi
 [[ "${PROJECT_DIR}" == /* && -d "${PROJECT_DIR}" && ! -L "${PROJECT_DIR}" ]] || die "Thư mục Compose phải là đường dẫn tuyệt đối hợp lệ, không phải symlink."
 PROJECT_DIR="$(realpath -e "${PROJECT_DIR}")"
-[[ -f "${PROJECT_DIR}/compose.yaml" || -f "${PROJECT_DIR}/docker-compose.yml" ]] || die "Không thấy compose.yaml hoặc docker-compose.yml trong ${PROJECT_DIR}."
+[[ -f "${PROJECT_DIR}/compose.yaml" || -f "${PROJECT_DIR}/compose.yml" \
+  || -f "${PROJECT_DIR}/docker-compose.yaml" || -f "${PROJECT_DIR}/docker-compose.yml" ]] \
+  || die "Không thấy compose.yaml, compose.yml, docker-compose.yaml hoặc docker-compose.yml trong ${PROJECT_DIR}."
 [[ ! -f "${PROJECT_DIR}/.project-managed" ]] || die "Đây là dự án mới do installer quản lý; dùng manage.sh của dự án đó."
 
 COMPOSE_FILE="${PROJECT_DIR}/compose.yaml"
-[[ -f "${COMPOSE_FILE}" ]] || COMPOSE_FILE="${PROJECT_DIR}/docker-compose.yml"
+if [[ ! -f "${COMPOSE_FILE}" ]]; then
+  for candidate in compose.yml docker-compose.yaml docker-compose.yml; do
+    if [[ -f "${PROJECT_DIR}/${candidate}" ]]; then
+      COMPOSE_FILE="${PROJECT_DIR}/${candidate}"
+      break
+    fi
+  done
+fi
 DEFAULT_SLUG="$(basename "${PROJECT_DIR}")"
 read -r -p "Tên Compose project cũ [${DEFAULT_SLUG}]: " PROJECT_SLUG
 PROJECT_SLUG="${PROJECT_SLUG:-${DEFAULT_SLUG}}"
