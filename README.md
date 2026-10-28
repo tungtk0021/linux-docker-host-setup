@@ -1,11 +1,18 @@
 # Ubuntu / Debian Docker host setup
 
 Công cụ cài Docker Engine, Docker Compose plugin, Nginx Proxy Manager (NPM), Portainer CE và Cloudflare Tunnel. Hỗ trợ Ubuntu Server 22.04/24.04/26.04 LTS, Debian 12/13 và kiến trúc `amd64`/`arm64`.
+
 ## Cài đặt nhanh
 
 ```bash
 sudo apt-get update && sudo apt-get install -y git
-git clone https://github.com/tungtk0021/ubuntu-deploy.git
+if [ -d ubuntu-deploy/.git ]; then
+  git -C ubuntu-deploy fetch origin
+  git -C ubuntu-deploy checkout main
+  git -C ubuntu-deploy pull --ff-only origin main
+else
+  git clone https://github.com/tungtk0021/ubuntu-deploy.git
+fi
 cd ubuntu-deploy
 chmod +x deploy-ubuntu.sh deploy-debian.sh manage-config.sh update-project.sh remove-legacy.sh
 sudo ./deploy-ubuntu.sh
