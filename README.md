@@ -168,13 +168,19 @@ Cloudflare có thể tạo Tunnel mới tại **Networking → Tunnels → Creat
 
 ### Khởi tạo tài khoản admin và API token của Portainer
 
-Không cần lấy “setup token” để tạo tài khoản admin. Sau khi thêm hostname Tunnel trỏ trực tiếp tới `https://portainer:9443`, mở hostname đó trong trình duyệt và tạo tài khoản đầu tiên (mặc định username `admin`, mật khẩu tối thiểu 12 ký tự). Hoàn tất trong vòng 5 phút kể từ lúc Portainer khởi động lần đầu; nếu hết thời gian, khởi động lại dịch vụ để có thêm 5 phút:
+Ở lần cài mới, Portainer từ phiên bản 2.43 yêu cầu **Setup token** một lần để tạo tài khoản admin đầu tiên. Trên Ubuntu/Debian, chạy lệnh dưới đây trong terminal của máy chủ; lệnh tự tìm container Portainer của dự án và in ra dòng token:
+
+```bash
+sudo docker logs "$(sudo docker ps --filter label=com.docker.compose.service=portainer --format '{{.Names}}' | head -n1)" 2>&1 | grep 'setup_token='
+```
+
+Sao chép phần nằm sau `setup_token=` vào ô **Setup token** trong trình duyệt, rồi tạo tài khoản admin (mặc định username `admin`, mật khẩu tối thiểu 12 ký tự). Token chỉ dùng một lần; không gửi token cho người khác hoặc lưu vào repo. Hoàn tất trong vòng 5 phút kể từ lúc Portainer khởi động; nếu hết thời gian, khởi động lại dịch vụ để tạo token mới:
 
 ```bash
 sudo docker compose -p <PROJECT_SLUG> -f <PROJECT_DIR>/compose.yaml --profile portainer restart portainer
 ```
 
-Để tạo **API access token** sau khi đăng nhập: chọn tên tài khoản ở góc trên bên phải → **My account** → **Access tokens** → **Add access token**. Nhập lại mật khẩu để xác nhận, đặt mô tả, rồi sao chép token ngay vì Portainer không hiển thị lại sau đó. Đây là token dùng gọi API, khác với mật khẩu admin và không cần thiết cho đăng nhập giao diện. Ví dụ gọi API (thay hostname; nhập token ẩn khi được hỏi):
+Để tạo **API access token** sau khi đăng nhập: chọn tên tài khoản ở góc trên bên phải → **My account** → **Access tokens** → **Add access token**. Nhập lại mật khẩu để xác nhận, đặt mô tả, rồi sao chép token ngay vì Portainer không hiển thị lại sau đó. Đây là token dùng gọi API, khác với Setup token và mật khẩu admin; không cần thiết cho đăng nhập giao diện. Ví dụ gọi API (thay hostname; nhập token ẩn khi được hỏi):
 
 ```bash
 read -rsp 'Portainer API token: ' PORTAINER_API_KEY; printf '\n'
